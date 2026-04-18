@@ -1,4 +1,6 @@
-import Link from "next/link";
+"use client";
+
+import { useRouter } from "next/navigation";
 import TopAppBar from "../components/TopAppBar";
 import BottomNav from "../components/BottomNav";
 
@@ -6,6 +8,24 @@ const AVATAR_URL =
   "https://lh3.googleusercontent.com/aida-public/AB6AXuBRg-XF7oYruItq5eBgoS_siIQpBjQDyGiD8j-ZZFPOrDASWUHl47QvbsqKOC0-Q7W_fSWLwgrFKGbgUuHM6WNnOhflmspvjpLs_NbvYET4DUfcAOoKfsLSazKOktWjsDpo1Jqh7X-N2oIwia8kUvjUHcvuVFY6nWNKpQ3UJUJXcg3xK8u-hyc4divvyun6SZVTDKtOPD93DjUClv1S4H27eWomJ4LECzrGIpYqasYvZWOo-yx_JX2AzCGeR-6ZDOXBpkNsyHUnCgE";
 
 export default function RoleSelectionPage() {
+  const router = useRouter();
+
+  const handleRoleSelect = (role: "owner" | "seeker") => {
+    // Persist role to localStorage
+    localStorage.setItem("zilla_user_role", role);
+
+    // Generate session ID if missing
+    if (!localStorage.getItem("zilla_session_id")) {
+      localStorage.setItem("zilla_session_id", crypto.randomUUID());
+    }
+
+    if (role === "owner") {
+      router.push("/dashboard/owner");
+    } else {
+      router.push("/onboarding");
+    }
+  };
+
   return (
     <div className="bg-surface text-on-surface font-body min-h-dvh flex flex-col relative overflow-x-hidden">
       {/* Top App Bar */}
@@ -26,9 +46,9 @@ export default function RoleSelectionPage() {
         {/* Role Selection Cards */}
         <section className="w-full max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12">
           {/* Owner Card */}
-          <Link
-            href="/dashboard/owner"
-            className="group relative block bg-surface-container-lowest rounded-[1.5rem] p-10 text-center transition-all duration-300 hover:scale-[1.02] hover:-translate-y-2 shadow-ambient hover:shadow-ambient-hover"
+          <button
+            onClick={() => handleRoleSelect("owner")}
+            className="group relative block bg-surface-container-lowest rounded-[1.5rem] p-10 text-center transition-all duration-300 hover:scale-[1.02] hover:-translate-y-2 shadow-ambient hover:shadow-ambient-hover cursor-pointer"
           >
             <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent rounded-[1.5rem] opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
             <div className="relative z-10 flex flex-col items-center">
@@ -44,12 +64,12 @@ export default function RoleSelectionPage() {
                 List properties and find verified tenants.
               </p>
             </div>
-          </Link>
+          </button>
 
           {/* Seeker Card */}
-          <Link
-            href="/onboarding"
-            className="group relative block bg-surface-container-lowest rounded-[1.5rem] p-10 text-center transition-all duration-300 hover:scale-[1.02] hover:-translate-y-2 shadow-ambient hover:shadow-ambient-hover"
+          <button
+            onClick={() => handleRoleSelect("seeker")}
+            className="group relative block bg-surface-container-lowest rounded-[1.5rem] p-10 text-center transition-all duration-300 hover:scale-[1.02] hover:-translate-y-2 shadow-ambient hover:shadow-ambient-hover cursor-pointer"
           >
             <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent rounded-[1.5rem] opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
             <div className="relative z-10 flex flex-col items-center">
@@ -65,7 +85,7 @@ export default function RoleSelectionPage() {
                 Discover rooms and match with like-minded roommates.
               </p>
             </div>
-          </Link>
+          </button>
         </section>
       </main>
 

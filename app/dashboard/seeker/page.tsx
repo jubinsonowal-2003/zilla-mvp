@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import Image from "next/image";
 import TopAppBar from "../../components/TopAppBar";
 import BottomNav from "../../components/BottomNav";
@@ -84,8 +85,21 @@ const filterChips = [
 ];
 
 export default function SeekerDashboard() {
+  const router = useRouter();
+  const [authChecked, setAuthChecked] = useState(false);
   const [activeSubTab, setActiveSubTab] = useState<"rooms" | "roommates">("rooms");
   const [prefs, setPrefs] = useState<Preferences>(defaultPrefs);
+
+  // Route guard: redirect if no session or role
+  useEffect(() => {
+    const sessionId = localStorage.getItem("zilla_session_id");
+    const role = localStorage.getItem("zilla_user_role");
+    if (!sessionId || !role) {
+      router.push("/role");
+      return;
+    }
+    setAuthChecked(true);
+  }, [router]);
 
   // Real data from Supabase
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -138,9 +152,11 @@ export default function SeekerDashboard() {
   }, []);
 
   useEffect(() => {
-    fetchRooms();
-    fetchSeekers();
-  }, [fetchRooms, fetchSeekers]);
+    if (authChecked) {
+      fetchRooms();
+      fetchSeekers();
+    }
+  }, [authChecked, fetchRooms, fetchSeekers]);
 
   // Frontend location filter for rooms — bulletproof case-insensitive
   const userLoc = prefs.preferredArea.toLowerCase().trim();

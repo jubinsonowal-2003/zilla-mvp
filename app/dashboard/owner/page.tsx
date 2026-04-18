@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import Image from "next/image";
 import TopAppBar from "../../components/TopAppBar";
 import BottomNav from "../../components/BottomNav";
@@ -21,6 +22,20 @@ interface Room {
 }
 
 export default function OwnerDashboard() {
+  const router = useRouter();
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // Route guard: redirect if no session or role
+  useEffect(() => {
+    const sessionId = localStorage.getItem("zilla_session_id");
+    const role = localStorage.getItem("zilla_user_role");
+    if (!sessionId || !role) {
+      router.push("/role");
+      return;
+    }
+    setAuthChecked(true);
+  }, [router]);
+
   // Form state
   const [title, setTitle] = useState("");
   const [price, setPrice] = useState("");
@@ -41,12 +56,16 @@ export default function OwnerDashboard() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Fetch listings
+  // Fetch listings — ONLY for the current user
   const fetchListings = useCallback(async () => {
+    const sessionId = localStorage.getItem("zilla_session_id");
+    if (!sessionId) return;
+
     setIsLoading(true);
     const { data, error } = await supabase
       .from("rooms")
       .select("*")
+      .eq("user_id", sessionId)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -58,8 +77,8 @@ export default function OwnerDashboard() {
   }, []);
 
   useEffect(() => {
-    fetchListings();
-  }, [fetchListings]);
+    if (authChecked) fetchListings();
+  }, [authChecked, fetchListings]);
 
   // Handle file selection
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
