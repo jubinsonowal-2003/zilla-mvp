@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import TopAppBar from "../components/TopAppBar";
-import BottomNav from "../components/BottomNav";
+
 
 const AVATAR_URL =
   "https://lh3.googleusercontent.com/aida-public/AB6AXuBRg-XF7oYruItq5eBgoS_siIQpBjQDyGiD8j-ZZFPOrDASWUHl47QvbsqKOC0-Q7W_fSWLwgrFKGbgUuHM6WNnOhflmspvjpLs_NbvYET4DUfcAOoKfsLSazKOktWjsDpo1Jqh7X-N2oIwia8kUvjUHcvuVFY6nWNKpQ3UJUJXcg3xK8u-hyc4divvyun6SZVTDKtOPD93DjUClv1S4H27eWomJ4LECzrGIpYqasYvZWOo-yx_JX2AzCGeR-6ZDOXBpkNsyHUnCgE";
@@ -89,8 +89,7 @@ export default function RoleSelectionPage() {
         </section>
       </main>
 
-      {/* Bottom Nav Bar */}
-      <BottomNav activeTab="Explore" />
+
 
       {/* Background Decorative Orbs */}
       <div className="fixed top-[-10%] right-[-5%] w-[500px] h-[500px] rounded-full bg-primary/5 blur-[100px] -z-10 pointer-events-none" />
