@@ -6,15 +6,15 @@ import { useEffect, useState } from "react";
 
 const ownerNavItems = [
   { icon: "apartment", label: "Listings", href: "/dashboard/owner" },
-  { icon: "cloud_upload", label: "Upload", href: "/upload" },
-  { icon: "person", label: "Profile", href: "/profile" },
+  { icon: "cloud_upload", label: "Upload", href: "/dashboard/owner" },
+  { icon: "person", label: "Profile", href: "/dashboard/owner/profile" },
 ];
 
 const seekerNavItems = [
-  { icon: "explore", label: "Explore", href: "/" },
+  { icon: "explore", label: "Explore", href: "/dashboard/seeker" },
   { icon: "group_add", label: "Matches", href: "/dashboard/seeker" },
-  { icon: "bookmark", label: "Saved", href: "/saved" },
-  { icon: "person", label: "Profile", href: "/profile" },
+  { icon: "bookmark", label: "Saved", href: "/dashboard/seeker/saved" },
+  { icon: "person", label: "Profile", href: "/dashboard/seeker/profile" },
 ];
 
 interface BottomNavProps {

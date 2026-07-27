@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { supabase } from "@/lib/supabase";
+import { ensureSeekerProfile } from "@/lib/ensureSeekerProfile";
 
 export default function AuthPage() {
   const router = useRouter();
@@ -9,25 +12,74 @@ export default function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showErrors, setShowErrors] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  // Separate flag so the password-length error appears inline under the field
+  const [passwordTooShort, setPasswordTooShort] = useState(false);
 
   const isFormValid =
     fullName.trim() !== "" && email.trim() !== "" && password.trim() !== "";
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // ── Client-side field presence check ──────────────────────────────────
     if (!isFormValid) {
       setShowErrors(true);
       return;
     }
 
-    // Simulate successful signup — persist user name for downstream pages
-    localStorage.setItem(
-      "zillaUser",
-      JSON.stringify({ fullName, email })
-    );
+    // ── Client-side password length check (Supabase minimum is 6 chars) ───
+    if (password.length < 6) {
+      setPasswordTooShort(true);
+      return;
+    }
+    setPasswordTooShort(false);
 
-    router.push("/role");
+    setIsLoading(true);
+    setAuthError(null);
+
+    try {
+      // ── 1. Create the user in Supabase Auth ──────────────────────────────
+      const signUpEmail = email.trim();
+      console.log("[ZILLA] signUp payload →", { email: signUpEmail });
+
+      const { data, error } = await supabase.auth.signUp({
+        email: signUpEmail,
+        password,
+      });
+
+      if (error || !data.user) {
+        console.error("[ZILLA] Signup failed:", error);
+        setAuthError(
+          error?.message === "User already registered"
+            ? "An account with this email already exists. Try logging in instead."
+            : error?.message ?? "Signup failed. Please try again."
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      // ── 2. Auth succeeded — persist session details ──────────────────────
+      const userId = data.user.id;
+      localStorage.setItem("zilla_session_id", userId);
+      localStorage.setItem("zilla_user_role", "seeker");
+      localStorage.setItem("zillaUser", JSON.stringify({ fullName: fullName.trim(), email: signUpEmail }));
+
+      // ── 3. Guarantee a minimal seeker_profiles row for FK safety ─────────
+      await ensureSeekerProfile({ fullName: fullName.trim() });
+
+      // ── 4. Always send brand-new users through the onboarding flow ────────
+      // After sign-up the profile exists but has empty preference fields, so
+      // we always route to /role → /onboarding rather than straight to the
+      // dashboard.  Only returning users who have already onboarded skip this.
+      router.push("/role");
+    } catch (err) {
+      console.error("[ZILLA] Unexpected signup error:", err);
+      setAuthError("An unexpected error occurred. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const inputErrorRing = "ring-2 ring-error/60";
@@ -52,6 +104,14 @@ export default function AuthPage() {
             Your editorial real estate experience starts here.
           </p>
         </div>
+
+        {/* Auth Error Banner */}
+        {authError && (
+          <div className="mb-5 relative z-10 flex items-center gap-2.5 rounded-xl bg-error/10 border border-error/25 px-4 py-3 text-sm font-body text-error">
+            <span className="material-symbols-outlined text-[18px] shrink-0">error</span>
+            {authError}
+          </div>
+        )}
 
         {/* Form */}
         <form className="space-y-5 relative z-10" onSubmit={handleSubmit}>
@@ -141,7 +201,7 @@ export default function AuthPage() {
               </div>
               <input
                 className={`block w-full pl-10 pr-3 py-3 bg-surface-container-low border-0 outline-none rounded-[0.75rem] text-on-surface placeholder:text-outline-variant font-body text-base transition-all focus:ring-[2px] focus:ring-primary/40 ${
-                  showErrors && !password.trim() ? inputErrorRing : ""
+                  (showErrors && !password.trim()) || passwordTooShort ? inputErrorRing : ""
                 }`}
                 id="password"
                 placeholder="••••••••"
@@ -150,6 +210,7 @@ export default function AuthPage() {
                 onChange={(e) => {
                   setPassword(e.target.value);
                   if (showErrors) setShowErrors(false);
+                  if (passwordTooShort) setPasswordTooShort(false);
                 }}
               />
             </div>
@@ -158,14 +219,30 @@ export default function AuthPage() {
                 Please enter a password
               </p>
             )}
+            {passwordTooShort && (
+              <p className="text-error text-xs font-label mt-1.5 ml-1">
+                Password must be at least 6 characters long
+              </p>
+            )}
           </div>
 
           {/* CTA Button */}
           <button
-            className="w-full mt-6 py-4 px-6 rounded-xl bg-gradient-to-br from-primary to-primary-container text-on-primary font-headline font-semibold text-lg hover:scale-[1.02] transition-transform duration-200 shadow-md cursor-pointer"
+            className="w-full mt-6 py-4 px-6 rounded-xl bg-gradient-to-br from-primary to-primary-container text-on-primary font-headline font-semibold text-lg hover:scale-[1.02] transition-transform duration-200 shadow-md cursor-pointer disabled:opacity-70 disabled:scale-100 flex items-center justify-center gap-2"
             type="submit"
+            disabled={isLoading}
           >
-            Get Started
+            {isLoading ? (
+              <>
+                <svg className="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Creating account...
+              </>
+            ) : (
+              "Get Started"
+            )}
           </button>
         </form>
 
@@ -180,12 +257,23 @@ export default function AuthPage() {
 
         {/* Google Auth */}
         <button
-          onClick={() => {
+          onClick={async () => {
             localStorage.setItem(
               "zillaUser",
               JSON.stringify({ fullName: "User", email: "user@gmail.com" })
             );
-            router.push("/role");
+            let sessionId = localStorage.getItem("zilla_session_id");
+            if (!sessionId) {
+              sessionId = crypto.randomUUID();
+              localStorage.setItem("zilla_session_id", sessionId);
+            }
+            localStorage.setItem("zilla_user_role", "seeker");
+            const { data: profile } = await supabase
+              .from("seeker_profiles")
+              .select("id")
+              .eq("user_id", sessionId)
+              .maybeSingle();
+            router.push(profile ? "/dashboard/seeker" : "/role");
           }}
           className="w-full relative z-10 py-3 px-4 rounded-[0.75rem] bg-surface-container-lowest border border-outline-variant/30 text-on-surface font-body font-medium hover:bg-surface-container-low transition-colors duration-200 flex items-center justify-center gap-3 cursor-pointer"
         >
@@ -218,9 +306,9 @@ export default function AuthPage() {
         <div className="mt-6 text-center relative z-10">
           <p className="text-sm font-body text-on-surface-variant">
             Already have an account?{" "}
-            <button className="text-primary font-semibold hover:text-primary-container transition-colors cursor-pointer">
+            <Link href="/login" className="text-primary font-semibold hover:text-primary-container transition-colors">
               Log In
-            </button>
+            </Link>
           </p>
         </div>
       </div>

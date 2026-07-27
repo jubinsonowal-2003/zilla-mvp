@@ -174,6 +174,11 @@ export default function OwnerDashboard() {
 
       // Refresh listings
       fetchListings();
+
+      // Scroll to listings section so owner sees the new room
+      setTimeout(() => {
+        document.getElementById("active-listings")?.scrollIntoView({ behavior: "smooth" });
+      }, 300);
     } catch (err) {
       showToast(
         err instanceof Error ? err.message : "Something went wrong",
@@ -375,7 +380,7 @@ export default function OwnerDashboard() {
         </section>
 
         {/* Section B: Active Listings */}
-        <section className="w-full lg:w-7/12 flex flex-col gap-6 mt-8 lg:mt-0">
+        <section id="active-listings" className="w-full lg:w-7/12 flex flex-col gap-6 mt-8 lg:mt-0">
           <div className="flex flex-row items-center justify-between mb-2">
             <div className="flex flex-col gap-2">
               <h2 className="text-[1.75rem] font-headline font-semibold tracking-tight text-on-surface">

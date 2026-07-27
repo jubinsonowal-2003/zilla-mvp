@@ -1,16 +1,22 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import TopAppBar from "../components/TopAppBar";
-
+import { ensureSeekerProfile } from "@/lib/ensureSeekerProfile";
+import { signUpInsertProfile } from "@/app/actions/auth";
+import { supabase } from "@/lib/supabase";
 
 const AVATAR_URL =
   "https://lh3.googleusercontent.com/aida-public/AB6AXuBRg-XF7oYruItq5eBgoS_siIQpBjQDyGiD8j-ZZFPOrDASWUHl47QvbsqKOC0-Q7W_fSWLwgrFKGbgUuHM6WNnOhflmspvjpLs_NbvYET4DUfcAOoKfsLSazKOktWjsDpo1Jqh7X-N2oIwia8kUvjUHcvuVFY6nWNKpQ3UJUJXcg3xK8u-hyc4divvyun6SZVTDKtOPD93DjUClv1S4H27eWomJ4LECzrGIpYqasYvZWOo-yx_JX2AzCGeR-6ZDOXBpkNsyHUnCgE";
 
 export default function RoleSelectionPage() {
   const router = useRouter();
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleRoleSelect = (role: "owner" | "seeker") => {
+  const handleRoleSelect = async (role: "owner" | "seeker") => {
+    setIsLoading(true);
+
     // Persist role to localStorage
     localStorage.setItem("zilla_user_role", role);
 
@@ -19,9 +25,32 @@ export default function RoleSelectionPage() {
       localStorage.setItem("zilla_session_id", crypto.randomUUID());
     }
 
+    // ── Insert the profiles row on the server ────────────────────────────
+    // Resolve the authenticated user so we can pass their UUID to the
+    // Server Action.  getUser() validates the session cookie/token securely.
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (user) {
+      const { error } = await signUpInsertProfile(user.id, role);
+      if (error) {
+        console.error("[RolePage] Failed to insert profile:", error);
+        // Non-fatal: continue routing even if the insert fails, so the user
+        // isn't stuck on this page.  The login action handles missing rows.
+      }
+    } else {
+      console.warn("[RolePage] No authenticated user found; skipping profiles insert.");
+    }
+    // ────────────────────────────────────────────────────────────────────
+
     if (role === "owner") {
       router.push("/dashboard/owner");
     } else {
+      // Guarantee the seeker_profiles row exists before entering the booking
+      // flow so FK constraints are always satisfied, even if onboarding is
+      // skipped or the user navigates directly to the dashboard.
+      await ensureSeekerProfile();
       router.push("/onboarding");
     }
   };
@@ -48,7 +77,8 @@ export default function RoleSelectionPage() {
           {/* Owner Card */}
           <button
             onClick={() => handleRoleSelect("owner")}
-            className="group relative block bg-surface-container-lowest rounded-[1.5rem] p-10 text-center transition-all duration-300 hover:scale-[1.02] hover:-translate-y-2 shadow-ambient hover:shadow-ambient-hover cursor-pointer"
+            disabled={isLoading}
+            className="group relative block bg-surface-container-lowest rounded-[1.5rem] p-10 text-center transition-all duration-300 hover:scale-[1.02] hover:-translate-y-2 shadow-ambient hover:shadow-ambient-hover cursor-pointer disabled:opacity-60 disabled:scale-100 disabled:translate-y-0"
           >
             <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent rounded-[1.5rem] opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
             <div className="relative z-10 flex flex-col items-center">
@@ -69,7 +99,8 @@ export default function RoleSelectionPage() {
           {/* Seeker Card */}
           <button
             onClick={() => handleRoleSelect("seeker")}
-            className="group relative block bg-surface-container-lowest rounded-[1.5rem] p-10 text-center transition-all duration-300 hover:scale-[1.02] hover:-translate-y-2 shadow-ambient hover:shadow-ambient-hover cursor-pointer"
+            disabled={isLoading}
+            className="group relative block bg-surface-container-lowest rounded-[1.5rem] p-10 text-center transition-all duration-300 hover:scale-[1.02] hover:-translate-y-2 shadow-ambient hover:shadow-ambient-hover cursor-pointer disabled:opacity-60 disabled:scale-100 disabled:translate-y-0"
           >
             <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent rounded-[1.5rem] opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
             <div className="relative z-10 flex flex-col items-center">

@@ -14,6 +14,7 @@ export default function OnboardingPage() {
   const [smokingAllowed, setSmokingAllowed] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const sleepOptions = ["Early Bird", "Night Owl", "Flexible"];
   const workOptions = ["9 to 5", "Remote", "Night Shift", "Student"];
@@ -30,27 +31,32 @@ export default function OnboardingPage() {
     }
 
     setIsSaving(true);
+    setSaveError(null);
 
     try {
-      // MVP Session Hack: generate or reuse a unique session ID
-      let sessionId = localStorage.getItem("zilla_session_id");
-      if (!sessionId) {
-        sessionId = crypto.randomUUID();
-        localStorage.setItem("zilla_session_id", sessionId);
+      // ── Resolve the canonical auth user ID ──────────────────────────────
+      const { data: { user } } = await supabase.auth.getUser();
+
+      const userId = user?.id ?? (localStorage.getItem("zilla_session_id") || crypto.randomUUID());
+      if (!user?.id) {
+        localStorage.setItem("zilla_session_id", userId);
       }
 
-      // Get user name from auth step
+      // Derive best display name from auth metadata or localStorage
       let userName = "Anonymous";
       try {
-        const user = JSON.parse(localStorage.getItem("zillaUser") || "{}");
-        userName = user.fullName || "Anonymous";
+        const stored = JSON.parse(localStorage.getItem("zillaUser") || "{}");
+        userName =
+          stored.fullName ||
+          user?.user_metadata?.full_name ||
+          user?.email?.split("@")[0] ||
+          "Anonymous";
       } catch { /* ignore */ }
 
-      // INSERT into seeker_profiles — ONLY valid columns:
-      // user_id, full_name, budget_min, budget_max, location, vibe, work_style
       const payload = {
-        user_id: sessionId,
+        user_id: userId,
         full_name: userName,
+        email: user?.email ?? "",
         budget_min: parseInt(budgetMin),
         budget_max: parseInt(budgetMax),
         location: preferredArea.trim(),
@@ -58,39 +64,71 @@ export default function OnboardingPage() {
         work_style: workStyle,
       };
 
-      console.log("[ZILLA] Inserting seeker profile:", payload);
+      console.log("[ZILLA] Saving seeker profile:", payload);
 
-      const { data, error } = await supabase
+      // ── Step 1: Try upsert with explicit conflict target ─────────────────
+      const { error: upsertError } = await supabase
         .from("seeker_profiles")
-        .insert(payload)
+        .upsert(payload, { onConflict: "user_id" })
         .select();
 
-      if (error) {
-        console.error("[ZILLA] Insert failed:", JSON.stringify(error));
+      if (upsertError) {
+        // ── Step 2: Upsert failed — fall back to query → update / insert ───
+        console.warn("[ZILLA] Upsert failed, trying manual update/insert fallback:", upsertError.message);
+
+        const { data: existing } = await supabase
+          .from("seeker_profiles")
+          .select("id")
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        if (existing?.id) {
+          // Row already exists — update it in place
+          const { error: updateError } = await supabase
+            .from("seeker_profiles")
+            .update(payload)
+            .eq("user_id", userId);
+
+          if (updateError) {
+            console.error("[ZILLA] Fallback update failed:", updateError.message);
+            setSaveError("Could not save your preferences. Please try again.");
+            setIsSaving(false);
+            return;
+          }
+          console.log("[ZILLA] Profile updated via fallback update.");
+        } else {
+          // No existing row — insert a fresh one
+          const { error: insertError } = await supabase
+            .from("seeker_profiles")
+            .insert(payload);
+
+          if (insertError) {
+            console.error("[ZILLA] Fallback insert failed:", insertError.message);
+            setSaveError("Could not save your preferences. Please try again.");
+            setIsSaving(false);
+            return;
+          }
+          console.log("[ZILLA] Profile created via fallback insert.");
+        }
       } else {
-        console.log("[ZILLA] Profile saved successfully:", data);
+        console.log("[ZILLA] Profile upserted successfully.");
       }
 
-      // Persist to localStorage for immediate dashboard use
-      const preferences = {
-        budgetMin,
-        budgetMax,
-        preferredArea,
-        sleepSchedule,
-        workStyle,
-        smokingAllowed,
-      };
-      localStorage.setItem("zillaPreferences", JSON.stringify(preferences));
+      // ── Persist to localStorage for immediate dashboard use ───────────────
+      localStorage.setItem(
+        "zillaPreferences",
+        JSON.stringify({ budgetMin, budgetMax, preferredArea, sleepSchedule, workStyle, smokingAllowed })
+      );
 
       router.push("/dashboard/seeker");
     } catch (err) {
-      console.error("[ZILLA] Unexpected error:", err);
-      // Navigate anyway so user isn't stuck
-      router.push("/dashboard/seeker");
+      console.error("[ZILLA] Unexpected error during onboarding save:", err);
+      setSaveError("An unexpected error occurred. Please try again.");
     } finally {
       setIsSaving(false);
     }
   };
+
 
   const inputErrorRing = "ring-2 ring-error/60";
 
@@ -280,11 +318,19 @@ export default function OnboardingPage() {
         </div>
       </main>
 
-      {/* Error Toast */}
+      {/* Validation error toast — shown when required fields are empty */}
       {showErrors && !isFormValid && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[60] bg-error text-on-error px-6 py-3 rounded-xl shadow-lg font-body text-sm font-medium flex items-center gap-2 animate-[slideDown_0.3s_ease-out]">
           <span className="material-symbols-outlined text-[18px]">error</span>
           Please fill in all required fields
+        </div>
+      )}
+
+      {/* Save error toast — shown when the DB write fails */}
+      {saveError && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[60] bg-error text-on-error px-6 py-3 rounded-xl shadow-lg font-body text-sm font-medium flex items-center gap-2 animate-[slideDown_0.3s_ease-out]">
+          <span className="material-symbols-outlined text-[18px]">error</span>
+          {saveError}
         </div>
       )}
 

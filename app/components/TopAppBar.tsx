@@ -7,6 +7,7 @@ interface TopAppBarProps {
   avatarUrl?: string;
   showSearch?: boolean;
   showDesktopSearch?: boolean;
+  showPreferences?: boolean;
   label?: string;
   showBackButton?: boolean;
   onBackClick?: () => void;
@@ -16,6 +17,7 @@ export default function TopAppBar({
   avatarUrl,
   showSearch = true,
   showDesktopSearch = false,
+  showPreferences = false,
   label,
   showBackButton = false,
   onBackClick,
@@ -77,6 +79,15 @@ export default function TopAppBar({
               <span className="material-symbols-outlined">search</span>
             </button>
           )}
+          {showPreferences && (
+            <Link
+              href="/onboarding"
+              className="flex items-center gap-1.5 text-xs font-semibold font-body text-on-surface-variant hover:text-primary border border-outline-variant/25 hover:border-primary/40 bg-surface-container-low hover:bg-primary/5 px-3 py-1.5 rounded-full transition-all duration-200"
+            >
+              <span className="material-symbols-outlined text-[15px]">tune</span>
+              Preferences
+            </Link>
+          )}
           {avatarUrl && (
             <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-surface-container hover:scale-105 transition-transform duration-200 cursor-pointer relative">
               <Image
@@ -110,6 +121,15 @@ export default function TopAppBar({
           </Link>
         </div>
         <div className="flex items-center gap-3">
+          {showPreferences && (
+            <Link
+              href="/onboarding"
+              className="flex items-center gap-1 text-xs font-semibold font-body text-on-surface-variant hover:text-primary border border-outline-variant/25 hover:border-primary/40 bg-surface-container-low hover:bg-primary/5 px-2.5 py-1.5 rounded-full transition-all duration-200"
+            >
+              <span className="material-symbols-outlined text-[14px]">tune</span>
+              Prefs
+            </Link>
+          )}
           {showSearch && (
             <button className="text-primary hover:scale-105 transition-transform duration-200">
               <span className="material-symbols-outlined">search</span>
