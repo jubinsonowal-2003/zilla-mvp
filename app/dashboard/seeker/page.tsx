@@ -25,10 +25,10 @@ interface Room {
   title: string;
   price: number;
   location: string;
-  description: string;
-  image_url: string | null;
+  description?: string | null;
+  image_url?: string | null;
   image_urls?: string[] | null;
-  status: string;
+  status?: string;
   security_deposit?: number;
 }
 
