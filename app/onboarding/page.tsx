@@ -8,7 +8,9 @@ export default function OnboardingPage() {
   const router = useRouter();
   const [budgetMin, setBudgetMin] = useState("");
   const [budgetMax, setBudgetMax] = useState("");
-  const [preferredArea, setPreferredArea] = useState("");
+  // Composite location: city dropdown + locality text search
+  const [selectedCity, setSelectedCity] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [sleepSchedule, setSleepSchedule] = useState("Night Owl");
   const [workStyle, setWorkStyle] = useState("Remote");
   const [smokingAllowed, setSmokingAllowed] = useState(false);
@@ -16,13 +18,21 @@ export default function OnboardingPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  const MVP_CITIES = ["Guwahati", "Nirjuli", "Itanagar", "Jorhat", "Nagaon"];
   const sleepOptions = ["Early Bird", "Night Owl", "Flexible"];
   const workOptions = ["9 to 5", "Remote", "Night Shift", "Student"];
+
+  // Combine city + locality into a single location string for DB/localStorage
+  const preferredArea = selectedCity
+    ? searchQuery.trim()
+      ? `${selectedCity}, ${searchQuery.trim()}`
+      : selectedCity
+    : searchQuery.trim();
 
   const isFormValid =
     budgetMin.trim() !== "" &&
     budgetMax.trim() !== "" &&
-    preferredArea.trim() !== "";
+    selectedCity !== "";  // city is required; locality is optional
 
   const handleSubmit = async () => {
     if (!isFormValid) {
@@ -117,7 +127,7 @@ export default function OnboardingPage() {
       // ── Persist to localStorage for immediate dashboard use ───────────────
       localStorage.setItem(
         "zillaPreferences",
-        JSON.stringify({ budgetMin, budgetMax, preferredArea, sleepSchedule, workStyle, smokingAllowed })
+        JSON.stringify({ budgetMin, budgetMax, preferredArea, sleepSchedule, workStyle, smokingAllowed, selectedCity, searchQuery })
       );
 
       router.push("/dashboard/seeker");
@@ -216,34 +226,67 @@ export default function OnboardingPage() {
             </div>
           </section>
 
-          {/* Location Section */}
+          {/* Location Section — composite city + locality bar */}
           <section className="space-y-4">
             <label className="block font-label text-[0.75rem] uppercase tracking-wider text-on-surface font-semibold mb-2">
               Preferred Area
               <span className="text-error ml-1">*</span>
             </label>
-            <div className="relative">
-              <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-outline">
-                search
-              </span>
-              <input
-                className={`w-full bg-surface-container-low border-0 outline-none rounded-[0.75rem] py-4 pl-12 pr-4 text-on-surface font-body font-medium focus:ring-2 focus:ring-primary/40 focus:bg-surface-container-lowest transition-all placeholder:text-outline ${
-                  showErrors && !preferredArea.trim() ? inputErrorRing : ""
-                }`}
-                placeholder="Search neighborhoods or cities..."
-                type="text"
-                value={preferredArea}
-                onChange={(e) => {
-                  setPreferredArea(e.target.value);
-                  if (showErrors) setShowErrors(false);
-                }}
-              />
-              {showErrors && !preferredArea.trim() && (
-                <p className="text-error text-xs font-label mt-1.5 ml-1">
-                  Please enter a preferred area
-                </p>
-              )}
+
+            {/* ── Unified pill container ── */}
+            <div
+              className={`flex items-stretch bg-surface-container-low rounded-[0.75rem] overflow-hidden transition-shadow focus-within:ring-2 focus-within:ring-primary/40 focus-within:bg-surface-container-lowest ${
+                showErrors && selectedCity === "" ? inputErrorRing : ""
+              }`}
+            >
+              {/* City dropdown — left segment */}
+              <div className="relative flex items-center shrink-0">
+                <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-outline text-[18px] pointer-events-none">
+                  location_city
+                </span>
+                <select
+                  value={selectedCity}
+                  onChange={(e) => {
+                    setSelectedCity(e.target.value);
+                    if (showErrors) setShowErrors(false);
+                  }}
+                  className="appearance-none bg-transparent pl-10 pr-8 py-4 text-sm font-body font-medium text-on-surface focus:outline-none cursor-pointer min-w-[9rem]"
+                >
+                  <option value="" disabled>City</option>
+                  {MVP_CITIES.map((city) => (
+                    <option key={city} value={city}>{city}</option>
+                  ))}
+                </select>
+                {/* Custom chevron for the select */}
+                <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-outline text-[16px] pointer-events-none">
+                  expand_more
+                </span>
+              </div>
+
+              {/* Divider */}
+              <div className="w-px self-stretch bg-outline-variant/30 my-3" />
+
+              {/* Locality / Landmark input — right segment */}
+              <div className="relative flex-1 flex items-center">
+                <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-outline text-[18px] pointer-events-none">
+                  search
+                </span>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search universities, offices, or localities..."
+                  className="w-full bg-transparent pl-10 pr-4 py-4 text-sm font-body font-medium text-on-surface placeholder:text-outline focus:outline-none"
+                />
+              </div>
             </div>
+
+            {showErrors && selectedCity === "" && (
+              <p className="text-error text-xs font-label mt-1.5 ml-1 flex items-center gap-1">
+                <span className="material-symbols-outlined text-[13px]">error</span>
+                Please select a city
+              </p>
+            )}
           </section>
 
           {/* Sleep Schedule */}

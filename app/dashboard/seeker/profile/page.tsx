@@ -3,15 +3,63 @@
 import { useEffect, useState } from "react";
 import TopAppBar from "../../../components/TopAppBar";
 import BottomNav from "../../../components/BottomNav";
+import { supabase } from "@/lib/supabase";
 
 const AVATAR_URL =
   "https://lh3.googleusercontent.com/aida-public/AB6AXuCWBNlcG9YcIUJqpqMBSxtbZUYqdg0VgM-QcbmI8Vdk5aSiXa7ZUnC_tQ_wVzyydo_HPBEUT-fgARlpVkCrsk_htxt39xXAYiFu3glIFSfs5h2ESQWuwTw6bpfE6MQddAuw5gCkyMN6gSl76uAGZFD_fGVYhwVqSbzpcZU-cksc0Sn_xBKIV_mPyBUEcGrxXWznDvHdtH0ZQMevd6cTA_JrfOtQz07qJF5edYlbe3o3EsVofIofZpQXpIdthVdr7OwH99zVazJ02wQ";
 
+interface ProfileData {
+  fullName: string;
+  email: string;
+  phone: string | null;
+}
+
 export default function SeekerProfilePage() {
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [profile, setProfile] = useState<ProfileData | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setSessionId(localStorage.getItem("zilla_session_id"));
+    async function fetchProfile() {
+      try {
+        // 1. Get the authenticated session to retrieve email + user id.
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          setLoading(false);
+          return;
+        }
+
+        const email = user.email ?? "";
+
+        // 2. Query seeker_profiles for full_name and phone using the user's id.
+        const { data: seekerProfile } = await supabase
+          .from("seeker_profiles")
+          .select("full_name, phone")
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        setProfile({
+          fullName:
+            seekerProfile?.full_name ||
+            user.user_metadata?.full_name ||
+            "",
+          email,
+          phone:
+            seekerProfile?.phone ||
+            user.user_metadata?.phone ||
+            user.phone ||
+            null,
+        });
+      } catch (err) {
+        console.error("[SeekerProfile] Failed to fetch profile data:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchProfile();
   }, []);
 
   const handleLogout = () => {
@@ -42,15 +90,40 @@ export default function SeekerProfilePage() {
             Account Details
           </h2>
           <div className="space-y-4">
+            {/* Full Name */}
             <div className="flex items-center justify-between text-sm font-body">
-              <span className="text-on-surface-variant">Session ID</span>
-              <span className="font-mono text-xs text-on-surface bg-surface-container px-3 py-1.5 rounded-lg truncate max-w-[200px]">
-                {sessionId ? sessionId.slice(0, 12) + "…" : "—"}
-              </span>
+              <span className="text-on-surface-variant">Full Name</span>
+              {loading ? (
+                <span className="h-4 w-28 bg-surface-container animate-pulse rounded-md" />
+              ) : (
+                <span className="font-medium text-on-surface">
+                  {profile?.fullName || "—"}
+                </span>
+              )}
             </div>
+            <div className="h-px bg-outline-variant/20" />
+            {/* Email Address */}
             <div className="flex items-center justify-between text-sm font-body">
-              <span className="text-on-surface-variant">Role</span>
-              <span className="font-medium text-on-surface">Room Seeker</span>
+              <span className="text-on-surface-variant">Email Address</span>
+              {loading ? (
+                <span className="h-4 w-36 bg-surface-container animate-pulse rounded-md" />
+              ) : (
+                <span className="font-medium text-on-surface">
+                  {profile?.email || "—"}
+                </span>
+              )}
+            </div>
+            <div className="h-px bg-outline-variant/20" />
+            {/* Phone Number */}
+            <div className="flex items-center justify-between text-sm font-body">
+              <span className="text-on-surface-variant">Phone Number</span>
+              {loading ? (
+                <span className="h-4 w-24 bg-surface-container animate-pulse rounded-md" />
+              ) : profile?.phone ? (
+                <span className="font-medium text-on-surface">{profile.phone}</span>
+              ) : (
+                <span className="text-on-surface-variant/50 italic text-xs">Not added</span>
+              )}
             </div>
           </div>
         </div>

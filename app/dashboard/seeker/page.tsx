@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
 import TopAppBar from "../../components/TopAppBar";
 import BottomNav from "../../components/BottomNav";
 import { supabase } from "@/lib/supabase";
+import RoomCard from "../../components/RoomCard";
 
 const AVATAR_URL =
   "https://lh3.googleusercontent.com/aida-public/AB6AXuCWBNlcG9YcIUJqpqMBSxtbZUYqdg0VgM-QcbmI8Vdk5aSiXa7ZUnC_tQ_wVzyydo_HPBEUT-fgARlpVkCrsk_htxt39xXAYiFu3glIFSfs5h2ESQWuwTw6bpfE6MQddAuw5gCkyMN6gSl76uAGZFD_fGVYhwVqSbzpcZU-cksc0Sn_xBKIV_mPyBUEcGrxXWznDvHdtH0ZQMevd6cTA_JrfOtQz07qJF5edYlbe3o3EsVofIofZpQXpIdthVdr7OwH99zVazJ02wQ";
@@ -27,8 +27,156 @@ interface Room {
   location: string;
   description: string;
   image_url: string | null;
+  image_urls?: string[] | null;
   status: string;
   security_deposit?: number;
+}
+
+/* ─── Image Carousel (used inside Room Detail Modal) ─── */
+function ImageCarousel({ room }: { room: Room }) {
+  // Resolve the images array: prefer image_urls, fall back to image_url
+  const images: string[] = (
+    room.image_urls && room.image_urls.length > 0
+      ? room.image_urls
+      : room.image_url
+      ? [room.image_url]
+      : []
+  );
+
+  const [activeIdx, setActiveIdx] = useState(0);
+  const trackRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to the slide at `idx` imperatively
+  const scrollToSlide = (idx: number) => {
+    const track = trackRef.current;
+    if (!track) return;
+    const slideWidth = track.offsetWidth;
+    track.scrollTo({ left: slideWidth * idx, behavior: "smooth" });
+  };
+
+  // Keep activeIdx in sync while the user swipes manually
+  const handleScroll = () => {
+    const track = trackRef.current;
+    if (!track || images.length === 0) return;
+    const idx = Math.round(track.scrollLeft / track.offsetWidth);
+    setActiveIdx(idx);
+  };
+
+  const prev = () => {
+    const next = Math.max(0, activeIdx - 1);
+    setActiveIdx(next);
+    scrollToSlide(next);
+  };
+
+  const next = () => {
+    const nxt = Math.min(images.length - 1, activeIdx + 1);
+    setActiveIdx(nxt);
+    scrollToSlide(nxt);
+  };
+
+  // Single image or no image — simple fallback
+  if (images.length <= 1) {
+    return (
+      <div className="relative h-64 sm:h-72 w-full overflow-hidden rounded-t-3xl sm:rounded-t-3xl">
+        {images[0] ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={images[0]}
+            alt={room.title}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="w-full h-full bg-surface-container flex items-center justify-center">
+            <span className="material-symbols-outlined text-6xl text-outline/30">image</span>
+          </div>
+        )}
+        {/* Price badge */}
+        <div className="absolute bottom-4 left-4 bg-surface-container-lowest/90 backdrop-blur-sm px-4 py-2 rounded-xl shadow-lg">
+          <span className="font-headline font-bold text-xl text-primary">
+            ₹{room.price?.toLocaleString("en-IN")}
+          </span>
+          <span className="text-xs text-on-surface-variant font-body">/mo</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative h-64 sm:h-72 w-full overflow-hidden rounded-t-3xl sm:rounded-t-3xl select-none">
+
+      {/* ── Scrollable slide track ── */}
+      <div
+        ref={trackRef}
+        onScroll={handleScroll}
+        className="flex h-full overflow-x-auto snap-x snap-mandatory scrollbar-hide"
+        style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+      >
+        {images.map((src, i) => (
+          <div
+            key={i}
+            className="flex-shrink-0 w-full h-full snap-center"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={src}
+              alt={`${room.title} — photo ${i + 1}`}
+              className="w-full h-full object-cover"
+              draggable={false}
+            />
+          </div>
+        ))}
+      </div>
+
+      {/* ── Left arrow ── */}
+      {activeIdx > 0 && (
+        <button
+          onClick={prev}
+          aria-label="Previous photo"
+          className="absolute left-3 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/60 transition-colors"
+        >
+          <span className="material-symbols-outlined text-[18px]">chevron_left</span>
+        </button>
+      )}
+
+      {/* ── Right arrow ── */}
+      {activeIdx < images.length - 1 && (
+        <button
+          onClick={next}
+          aria-label="Next photo"
+          className="absolute right-3 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/60 transition-colors"
+        >
+          <span className="material-symbols-outlined text-[18px]">chevron_right</span>
+        </button>
+      )}
+
+      {/* ── Photo counter badge (top-right) ── */}
+      <div className="absolute top-3 right-3 z-10 bg-black/50 backdrop-blur-sm text-white text-xs font-semibold px-2.5 py-1 rounded-full">
+        {activeIdx + 1} / {images.length}
+      </div>
+
+      {/* ── Dot indicators (bottom-centre) ── */}
+      <div className="absolute bottom-12 left-0 right-0 flex justify-center gap-1.5 z-10 pointer-events-none">
+        {images.map((_, i) => (
+          <span
+            key={i}
+            className={`block rounded-full transition-all duration-300 ${
+              i === activeIdx
+                ? "w-4 h-1.5 bg-white"
+                : "w-1.5 h-1.5 bg-white/50"
+            }`}
+          />
+        ))}
+      </div>
+
+      {/* ── Price badge (bottom-left, above dots) ── */}
+      <div className="absolute bottom-4 left-4 z-10 bg-surface-container-lowest/90 backdrop-blur-sm px-4 py-2 rounded-xl shadow-lg">
+        <span className="font-headline font-bold text-xl text-primary">
+          ₹{room.price?.toLocaleString("en-IN")}
+        </span>
+        <span className="text-xs text-on-surface-variant font-body">/mo</span>
+      </div>
+    </div>
+  );
 }
 
 interface SeekerProfile {
@@ -289,7 +437,7 @@ function RoommatesComingSoon() {
 
       {/* ── Toast ── */}
       {showToast && (
-        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[60] bg-on-surface text-surface px-5 py-3 rounded-xl shadow-lg font-body text-sm font-medium flex items-center gap-2 animate-[slideDown_0.3s_ease-out]">
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[150] bg-on-surface text-surface px-5 py-3 rounded-xl shadow-lg font-body text-sm font-medium flex items-center gap-2 animate-[slideDown_0.3s_ease-out]">
           <span className="material-symbols-outlined text-[18px] text-green-400 filled">check_circle</span>
           Feedback saved — thanks for shaping ZILLA!
         </div>
@@ -306,6 +454,94 @@ export default function SeekerDashboard() {
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [depositInfoOpen, setDepositInfoOpen] = useState(false);
+
+  // ── Saved / bookmarked rooms ─────────────────────────────────────────────
+  const [savedRoomIds, setSavedRoomIds] = useState<Set<string>>(new Set());
+  // Stores auth.uid() — matches what the RLS policy evaluates (auth.uid() = seeker_id)
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
+
+  /** Fetch the user's saved room IDs on mount and seed bookmark state. */
+  const fetchSavedRooms = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    // Store auth.uid() — this is what saved_rooms.seeker_id must equal per RLS policy
+    setAuthUserId(user.id);
+
+    const { data: saved, error } = await supabase
+      .from("saved_rooms")
+      .select("room_id")
+      .eq("seeker_id", user.id);
+
+    if (error) {
+      console.error("[fetchSavedRooms] Failed to load saved rooms:", error);
+      return;
+    }
+
+    if (saved) {
+      setSavedRoomIds(new Set(saved.map((r) => r.room_id as string)));
+    }
+  }, []);
+
+  /**
+   * Toggle a room's saved state.
+   * - Optimistically updates UI first for instant feedback.
+   * - Then syncs to Supabase (insert or delete from saved_rooms).
+   * - seeker_id is set to auth.uid() to satisfy the RLS policy.
+   */
+  const toggleSave = async (e: React.MouseEvent, roomId: string) => {
+    e.stopPropagation();
+
+    // Guard: ensure user is authenticated before any DB operation
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      console.warn("[toggleSave] No authenticated user — aborting.");
+      return;
+    }
+
+    // Keep authUserId in sync in case it wasn't set yet (e.g. race on mount)
+    if (!authUserId) setAuthUserId(user.id);
+    const uid = user.id;
+
+    const isSaved = savedRoomIds.has(roomId);
+
+    // Optimistic UI update
+    setSavedRoomIds((prev) => {
+      const next = new Set(prev);
+      isSaved ? next.delete(roomId) : next.add(roomId);
+      return next;
+    });
+
+    if (isSaved) {
+      // Remove from saved_rooms — filter by auth.uid() so RLS allows the delete
+      const { error } = await supabase
+        .from("saved_rooms")
+        .delete()
+        .eq("seeker_id", uid)
+        .eq("room_id", roomId);
+
+      if (error) {
+        console.error("[toggleSave] Failed to unsave room:", error);
+        // Revert optimistic update
+        setSavedRoomIds((prev) => new Set([...prev, roomId]));
+      }
+    } else {
+      // Insert — seeker_id must equal auth.uid() for the RLS policy to pass
+      const { error } = await supabase
+        .from("saved_rooms")
+        .insert([{ room_id: roomId, seeker_id: uid }]);
+
+      if (error) {
+        console.error("[toggleSave] Failed to save room:", error);
+        // Revert optimistic update
+        setSavedRoomIds((prev) => {
+          const next = new Set(prev);
+          next.delete(roomId);
+          return next;
+        });
+      }
+    }
+  };
 
   // ── Form states for booking modal ──────────────────────────────────────────
   const [tenantName, setTenantName] = useState("");
@@ -379,8 +615,9 @@ export default function SeekerDashboard() {
     if (authChecked) {
       fetchRooms();
       fetchSeekers();
+      fetchSavedRooms();
     }
-  }, [authChecked, fetchRooms, fetchSeekers]);
+  }, [authChecked, fetchRooms, fetchSeekers, fetchSavedRooms]);
 
   // Frontend location filter for rooms — bulletproof case-insensitive
   const userLoc = prefs.preferredArea.toLowerCase().trim();
@@ -585,57 +822,15 @@ export default function SeekerDashboard() {
               />
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredRooms.map((room) => (
-                  <div
+                {filteredRooms.map((room, index) => (
+                  <RoomCard
                     key={room.id}
-                    className="bg-surface-container-lowest rounded-2xl overflow-hidden flex flex-col shadow-[0_10px_30px_rgba(70,72,212,0.03)] hover:shadow-ambient hover:-translate-y-1 transition-all duration-300 group"
-                  >
-                    <div className="relative h-52 w-full overflow-hidden p-2">
-                      {room.image_url ? (
-                        <Image
-                          alt={room.title}
-                          src={room.image_url}
-                          fill
-                          className="object-cover rounded-xl group-hover:scale-105 transition-transform duration-700 ease-out"
-                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-                        />
-                      ) : (
-                        <div className="w-full h-full rounded-xl bg-surface-container flex items-center justify-center">
-                          <span className="material-symbols-outlined text-4xl text-outline/40">image</span>
-                        </div>
-                      )}
-                      <div className="absolute top-4 right-4 bg-surface-container-lowest/90 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-bold text-primary flex items-center gap-1 shadow-sm z-10">
-                        <span className="w-2 h-2 rounded-full bg-green-500" />
-                        Available
-                      </div>
-                    </div>
-
-                    <div className="p-5 flex flex-col flex-grow">
-                      <h3 className="text-lg font-headline font-semibold text-on-surface mb-1 line-clamp-1">
-                        {room.title}
-                      </h3>
-                      <p className="text-sm text-on-surface-variant flex items-center gap-1 mb-4">
-                        <span className="material-symbols-outlined text-[16px] text-outline">location_on</span>
-                        {room.location}
-                      </p>
-                      {room.description && (
-                        <p className="text-xs text-on-surface-variant line-clamp-2 mb-4">{room.description}</p>
-                      )}
-                      <div className="mt-auto pt-4 flex items-center justify-between border-t border-surface-container/50">
-                        <div className="font-headline font-bold text-lg text-primary">
-                          ₹{room.price?.toLocaleString("en-IN")}
-                          <span className="text-xs text-on-surface-variant font-body font-normal">/mo</span>
-                        </div>
-                        <button
-                          onClick={() => setSelectedRoom(room)}
-                          className="bg-gradient-to-br from-primary to-primary-container text-white px-4 py-2 rounded-[0.75rem] text-xs font-semibold font-body hover:scale-105 transition-transform duration-200 cursor-pointer flex items-center gap-1"
-                        >
-                          View
-                          <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                    room={room}
+                    index={index}
+                    isSaved={savedRoomIds.has(room.id)}
+                    onToggleSave={toggleSave}
+                    onView={(r) => setSelectedRoom(r)}
+                  />
                 ))}
               </div>
             )}
@@ -651,7 +846,7 @@ export default function SeekerDashboard() {
       {/* ═══════════ ROOM DETAIL MODAL ═══════════ */}
       {selectedRoom && (
         <div
-          className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center"
+          className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center"
           onClick={() => setSelectedRoom(null)}
         >
           {/* Backdrop */}
@@ -670,29 +865,8 @@ export default function SeekerDashboard() {
               <span className="material-symbols-outlined text-[20px]">close</span>
             </button>
 
-            {/* Room Image */}
-            <div className="relative h-64 sm:h-72 w-full overflow-hidden rounded-t-3xl sm:rounded-t-3xl">
-              {selectedRoom.image_url ? (
-                <Image
-                  alt={selectedRoom.title}
-                  src={selectedRoom.image_url}
-                  fill
-                  className="object-cover"
-                  sizes="(max-width: 640px) 100vw, 500px"
-                />
-              ) : (
-                <div className="w-full h-full bg-surface-container flex items-center justify-center">
-                  <span className="material-symbols-outlined text-6xl text-outline/30">image</span>
-                </div>
-              )}
-              {/* Price badge on image */}
-              <div className="absolute bottom-4 left-4 bg-surface-container-lowest/90 backdrop-blur-sm px-4 py-2 rounded-xl shadow-lg">
-                <span className="font-headline font-bold text-xl text-primary">
-                  ₹{selectedRoom.price?.toLocaleString("en-IN")}
-                </span>
-                <span className="text-xs text-on-surface-variant font-body">/mo</span>
-              </div>
-            </div>
+            {/* Room Image Carousel */}
+            <ImageCarousel room={selectedRoom} />
 
             {/* Content */}
             <div className="p-6 sm:p-8">
@@ -747,7 +921,7 @@ export default function SeekerDashboard() {
       {/* ═══════════ BOOKING OPTIONS MODAL ═══════════ */}
       {showBookingModal && selectedRoom && (
         <div
-          className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center"
+          className="fixed inset-0 z-[210] flex items-end sm:items-center justify-center"
           onClick={() => setShowBookingModal(false)}
         >
           {/* Backdrop */}

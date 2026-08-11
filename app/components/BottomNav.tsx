@@ -48,7 +48,7 @@ export default function BottomNav({ activeTab }: BottomNavProps) {
   };
 
   return (
-    <nav className="md:hidden fixed bottom-6 inset-x-6 rounded-3xl z-50 glass-panel shadow-ambient-up">
+    <nav className="md:hidden fixed bottom-6 inset-x-6 rounded-3xl z-[100] pointer-events-auto glass-panel shadow-ambient-up">
       <div className="flex justify-around items-center h-20 w-full">
         {navItems.map((item) => {
           const isActive = getIsActive(item);

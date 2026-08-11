@@ -41,8 +41,8 @@ export default function OwnerDashboard() {
   const [price, setPrice] = useState("");
   const [location, setLocation] = useState("");
   const [description, setDescription] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // UI state
@@ -80,13 +80,27 @@ export default function OwnerDashboard() {
     if (authChecked) fetchListings();
   }, [authChecked, fetchListings]);
 
-  // Handle file selection
+  // Handle file selection (multiple)
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      setPreviewUrl(URL.createObjectURL(file));
-    }
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+
+    // Revoke any existing object URLs to avoid memory leaks
+    const newFiles = [...selectedFiles, ...files].slice(0, 8); // cap at 8 photos
+    const newUrls = newFiles.map((f, i) =>
+      i < selectedFiles.length ? previewUrls[i] : URL.createObjectURL(f)
+    );
+    setSelectedFiles(newFiles);
+    setPreviewUrls(newUrls);
+    // Reset the input so the same file can be re-selected if removed
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  // Remove a single selected image by index
+  const handleRemoveImage = (index: number) => {
+    URL.revokeObjectURL(previewUrls[index]);
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+    setPreviewUrls((prev) => prev.filter((_, i) => i !== index));
   };
 
   // Handle publish
@@ -106,31 +120,33 @@ export default function OwnerDashboard() {
         localStorage.setItem("zilla_session_id", sessionId);
       }
 
-      let imageUrl: string | null = null;
+      const imageUrls: string[] = [];
 
-      // 1. Upload image to Supabase Storage if selected
-      if (selectedFile) {
-        const fileExt = selectedFile.name.split(".").pop();
+      // 1. Upload each selected image to Supabase Storage
+      for (const file of selectedFiles) {
+        const fileExt = file.name.split(".").pop();
         const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
 
         const { error: uploadError } = await supabase.storage
           .from("room-images")
-          .upload(fileName, selectedFile, {
+          .upload(fileName, file, {
             cacheControl: "3600",
             upsert: false,
           });
 
         if (uploadError) {
-          throw new Error(`Image upload failed: ${uploadError.message}`);
+          throw new Error(`Image upload failed for ${file.name}: ${uploadError.message}`);
         }
 
-        // 2. Get public URL
         const { data: urlData } = supabase.storage
           .from("room-images")
           .getPublicUrl(fileName);
 
-        imageUrl = urlData.publicUrl;
+        imageUrls.push(urlData.publicUrl);
       }
+
+      // Backward-compat: first image URL goes into the legacy column too
+      const imageUrl: string | null = imageUrls[0] ?? null;
 
       // 3. Insert room data into the rooms table
       const payload = {
@@ -139,7 +155,8 @@ export default function OwnerDashboard() {
         price: parseInt(price),
         location: location.trim(),
         description: description.trim(),
-        image_url: imageUrl,
+        image_url: imageUrl,           // legacy single-image column
+        image_urls: imageUrls,          // new multi-image column
         status: "active",
       };
 
@@ -169,8 +186,8 @@ export default function OwnerDashboard() {
       setPrice("");
       setLocation("");
       setDescription("");
-      setSelectedFile(null);
-      setPreviewUrl(null);
+      setSelectedFiles([]);
+      setPreviewUrls([]);
 
       // Refresh listings
       fetchListings();
@@ -304,53 +321,85 @@ export default function OwnerDashboard() {
 
               {/* Photos Upload */}
               <div className="flex flex-col gap-2">
-                <label className="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant">
-                  Photos
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant">
+                    Photos
+                  </label>
+                  {selectedFiles.length > 0 && (
+                    <span className="text-xs text-outline font-body">
+                      {selectedFiles.length} / 8 selected
+                    </span>
+                  )}
+                </div>
+
+                {/* Hidden multi-file input */}
                 <input
                   ref={fileInputRef}
                   type="file"
                   accept="image/*"
+                  multiple
                   className="hidden"
                   onChange={handleFileSelect}
                 />
-                <div
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-full border-2 border-dashed border-outline-variant/50 rounded-2xl bg-surface-container-low/50 p-8 flex flex-col items-center justify-center gap-3 cursor-pointer hover:bg-surface-container-low transition-colors group relative overflow-hidden"
-                >
-                  {previewUrl ? (
-                    <div className="relative w-full h-32 rounded-xl overflow-hidden">
-                      <Image
-                        src={previewUrl}
-                        alt="Preview"
-                        fill
-                        className="object-cover"
-                        sizes="400px"
-                      />
-                      <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
-                        <span className="text-white text-sm font-medium bg-black/40 px-3 py-1 rounded-full">
-                          Click to change
-                        </span>
+
+                {/* Thumbnail grid */}
+                {selectedFiles.length > 0 ? (
+                  <div className="grid grid-cols-4 gap-2">
+                    {previewUrls.map((url, idx) => (
+                      <div key={url} className="relative aspect-square rounded-xl overflow-hidden group/thumb">
+                        <Image
+                          src={url}
+                          alt={`Preview ${idx + 1}`}
+                          fill
+                          className="object-cover"
+                          sizes="100px"
+                        />
+                        {/* Remove button */}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleRemoveImage(idx); }}
+                          className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity hover:bg-error"
+                          aria-label="Remove image"
+                        >
+                          <span className="material-symbols-outlined text-[12px]">close</span>
+                        </button>
+                        {/* First-image badge */}
+                        {idx === 0 && (
+                          <div className="absolute bottom-1 left-1 bg-primary/80 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-full">
+                            Cover
+                          </div>
+                        )}
                       </div>
+                    ))}
+
+                    {/* Add-more tile (only if under cap) */}
+                    {selectedFiles.length < 8 && (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="aspect-square rounded-xl border-2 border-dashed border-outline-variant/50 bg-surface-container-low/50 flex flex-col items-center justify-center gap-1 hover:bg-surface-container-low transition-colors text-outline"
+                        aria-label="Add more photos"
+                      >
+                        <span className="material-symbols-outlined text-xl">add_photo_alternate</span>
+                        <span className="text-[10px] font-medium">Add</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  /* Empty drop-zone */
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full border-2 border-dashed border-outline-variant/50 rounded-2xl bg-surface-container-low/50 p-8 flex flex-col items-center justify-center gap-3 cursor-pointer hover:bg-surface-container-low transition-colors group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-primary-container/20 flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
+                      <span className="material-symbols-outlined text-2xl">cloud_upload</span>
                     </div>
-                  ) : (
-                    <>
-                      <div className="w-12 h-12 rounded-full bg-primary-container/20 flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
-                        <span className="material-symbols-outlined text-2xl">
-                          cloud_upload
-                        </span>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-sm font-medium text-on-surface">
-                          Click to upload or drag and drop
-                        </p>
-                        <p className="text-xs text-outline mt-1">
-                          PNG, JPG or WebP (max. 5MB)
-                        </p>
-                      </div>
-                    </>
-                  )}
-                </div>
+                    <div className="text-center">
+                      <p className="text-sm font-medium text-on-surface">Click to upload photos</p>
+                      <p className="text-xs text-outline mt-1">Up to 8 photos · PNG, JPG or WebP</p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Publish Button */}

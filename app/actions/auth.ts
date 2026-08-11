@@ -14,7 +14,7 @@
  *                          `profiles`, then resolves the correct redirect path:
  *
  *                            owner  → /dashboard/owner
- *                            seeker (with seeker_profiles row) → /dashboard
+ *                            seeker (with seeker_profiles row) → /dashboard/seeker
  *                            seeker (no seeker_profiles row)   → /onboarding
  *
  * Both actions verify the caller is authenticated via the anon Supabase client
@@ -138,7 +138,7 @@ export async function loginAction(accessToken: string): Promise<{
 
   if (seekerProfile) {
     // Onboarding record exists → fully onboarded seeker.
-    return { redirectTo: "/dashboard", error: null };
+    return { redirectTo: "/dashboard/seeker", error: null };
   } else {
     // No onboarding record → send to the preferences onboarding page.
     return { redirectTo: "/onboarding", error: null };
