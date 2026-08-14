@@ -14,6 +14,8 @@ export default function OnboardingPage() {
   const [sleepSchedule, setSleepSchedule] = useState("Night Owl");
   const [workStyle, setWorkStyle] = useState("Remote");
   const [smokingAllowed, setSmokingAllowed] = useState(false);
+  /** Optional specific landmark (college/office) — geocoded to lat/lng on save */
+  const [landmark, setLandmark] = useState("");
   const [showErrors, setShowErrors] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -63,6 +65,31 @@ export default function OnboardingPage() {
           "Anonymous";
       } catch { /* ignore */ }
 
+      // ── Geocode the landmark (if provided) ─────────────────────────────
+      let targetLatitude: number | null = null;
+      let targetLongitude: number | null = null;
+
+      if (landmark.trim()) {
+        try {
+          const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(landmark.trim())}&limit=1`;
+          const geoRes = await fetch(geoUrl, {
+            headers: { "Accept-Language": "en", "User-Agent": "ZillaApp/1.0" },
+          });
+          if (geoRes.ok) {
+            const geoData = await geoRes.json();
+            if (geoData.length > 0) {
+              targetLatitude  = parseFloat(geoData[0].lat);
+              targetLongitude = parseFloat(geoData[0].lon);
+              console.log(`[ZILLA] Landmark geocoded: ${landmark.trim()} → (${targetLatitude}, ${targetLongitude})`);
+            } else {
+              console.warn(`[ZILLA] Nominatim returned no results for landmark: "${landmark.trim()}"`);
+            }
+          }
+        } catch (geoErr) {
+          console.warn("[ZILLA] Landmark geocoding failed (network?). Saving as null.", geoErr);
+        }
+      }
+
       const payload = {
         user_id: userId,
         full_name: userName,
@@ -72,6 +99,8 @@ export default function OnboardingPage() {
         location: preferredArea.trim(),
         vibe: sleepSchedule,
         work_style: workStyle,
+        target_latitude:  targetLatitude,
+        target_longitude: targetLongitude,
       };
 
       console.log("[ZILLA] Saving seeker profile:", payload);
@@ -127,7 +156,7 @@ export default function OnboardingPage() {
       // ── Persist to localStorage for immediate dashboard use ───────────────
       localStorage.setItem(
         "zillaPreferences",
-        JSON.stringify({ budgetMin, budgetMax, preferredArea, sleepSchedule, workStyle, smokingAllowed, selectedCity, searchQuery })
+        JSON.stringify({ budgetMin, budgetMax, preferredArea, sleepSchedule, workStyle, smokingAllowed, selectedCity, searchQuery, landmark })
       );
 
       router.push("/dashboard/seeker");
@@ -287,6 +316,28 @@ export default function OnboardingPage() {
                 Please select a city
               </p>
             )}
+
+            {/* ── Specific Landmark (optional) — geocoded to target_lat/lng ── */}
+            <div className="relative mt-4">
+              <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-outline text-[18px] pointer-events-none">
+                location_on
+              </span>
+              <input
+                id="landmark"
+                type="text"
+                value={landmark}
+                onChange={(e) => setLandmark(e.target.value)}
+                placeholder="e.g., NERIST, IIT Guwahati, Cybex Park…"
+                className="w-full bg-surface-container-low border-0 outline-none rounded-[0.75rem] py-4 pl-12 pr-4 text-sm font-body font-medium text-on-surface placeholder:text-outline focus:ring-2 focus:ring-primary/40 focus:bg-surface-container-lowest transition-all"
+              />
+            </div>
+            <p className="text-xs text-on-surface-variant font-body flex items-center gap-1.5 mt-2 ml-1">
+              <span className="material-symbols-outlined text-[13px] text-primary">my_location</span>
+              <span>
+                <span className="font-semibold text-on-surface">Specific Landmark</span>
+                {" "}(College, Office, etc.) — Optional. Used to find rooms closest to you.
+              </span>
+            </p>
           </section>
 
           {/* Sleep Schedule */}
