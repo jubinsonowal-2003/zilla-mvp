@@ -22,10 +22,13 @@ export type CreateBookingResponse = BookingResult | BookingError;
 // Falls back to the anon key if the service key is not configured yet.
 
 function getServerClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  // Trim to remove any accidental newlines injected by Vercel's env var
+  // storage — a trailing newline in the key becomes an invalid header value
+  // in the strict Edge runtime, causing: TypeError: Headers.set: "eyJ..."
   const serviceKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ??
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    (process.env.SUPABASE_SERVICE_ROLE_KEY ??
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)?.trim();
 
   if (!url || !serviceKey) {
     throw new Error(
