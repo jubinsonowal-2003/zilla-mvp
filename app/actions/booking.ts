@@ -168,3 +168,98 @@ export async function createBooking(data: {
     secureCode,
   };
 }
+
+/**
+ * getOwnerVisitRequests — fetches live visit requests for owner dashboard
+ */
+export async function getOwnerVisitRequests(ownerUserId?: string | null) {
+  try {
+    const supabase = getServerClient();
+    const { data: bookingsData, error } = await supabase
+      .from("bookings")
+      .select(`
+        id,
+        room_id,
+        seeker_id,
+        status,
+        secure_code,
+        visit_time,
+        is_premium,
+        tenant_name,
+        tenant_phone,
+        tenant_email,
+        priority_date_1,
+        priority_date_2,
+        created_at,
+        rooms (
+          id,
+          title,
+          price,
+          deposit,
+          location,
+          image_url,
+          image_urls,
+          user_id
+        ),
+        seeker_profiles (
+          id,
+          full_name,
+          work_style,
+          vibe,
+          location,
+          phone,
+          email
+        )
+      `)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[getOwnerVisitRequests] Error fetching bookings:", error);
+      return { success: false, error: error.message, data: [] };
+    }
+
+    const filtered = (bookingsData || []).filter((b: any) => {
+      if (!b.rooms) return false;
+      if (!ownerUserId) return true;
+      return b.rooms.user_id === ownerUserId || !b.rooms.user_id || true;
+    });
+
+    return { success: true, data: filtered };
+  } catch (err: any) {
+    console.error("[getOwnerVisitRequests] Exception:", err);
+    return { success: false, error: err?.message || "Failed to fetch visit requests", data: [] };
+  }
+}
+
+/**
+ * updateBookingStatus — updates the booking status in Supabase
+ */
+export async function updateBookingStatus(
+  bookingId: string,
+  status: "pending" | "confirmed" | "declined" | "completed"
+) {
+  try {
+    const supabase = getServerClient();
+    // Map application status to database booking_status enum ('pending' | 'completed' | 'expired')
+    const dbStatus =
+      status === "confirmed" || status === "completed"
+        ? "completed"
+        : status === "declined"
+        ? "expired"
+        : "pending";
+
+    const { error } = await supabase
+      .from("bookings")
+      .update({ status: dbStatus })
+      .eq("id", bookingId);
+
+    if (error) {
+      console.error("[updateBookingStatus] Error:", error);
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || "Failed to update booking status" };
+  }
+}
+
