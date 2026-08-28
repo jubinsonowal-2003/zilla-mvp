@@ -16,14 +16,21 @@ export async function ensureSeekerProfile(opts?: {
   /** Override the display name stored in the profile. */
   fullName?: string;
 }): Promise<string | null> {
-  // 1. Get the canonical Supabase auth user — never trust localStorage alone.
+  // ─ FIX: use getSession() (local cache read, no network lock) instead of ────
+  // getUser() (network round-trip that acquires a storage lock).            
+  // This is called immediately after signUp(), at which point the SDK is    
+  // still writing the new session to localStorage. A concurrent getUser()   
+  // races for the same lock and throws AbortError, breaking the caller's    
+  // finally block and leaving the UI stuck on "Creating account...".        
   const {
-    data: { user },
+    data: { session },
     error: authError,
-  } = await supabase.auth.getUser();
+  } = await supabase.auth.getSession();
+
+  const user = session?.user ?? null;
 
   if (authError || !user) {
-    console.warn("[ensureSeekerProfile] No authenticated user found.");
+    console.warn("[ensureSeekerProfile] No authenticated session found.");
     return null;
   }
 

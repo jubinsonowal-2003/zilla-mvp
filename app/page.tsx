@@ -23,14 +23,24 @@ export default function AuthPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // ── DEBUG: log the raw form state so we can see if an early-return fires ─
+    console.log('[ZILLA] handleSubmit called → form state:', {
+      fullName: JSON.stringify(fullName),
+      email: JSON.stringify(email),
+      passwordLength: password.length,
+      isFormValid,
+    });
+
     // ── Client-side field presence check ──────────────────────────────────
     if (!isFormValid) {
+      console.warn('[ZILLA] Blocked by isFormValid check — one or more fields are empty.');
       setShowErrors(true);
       return;
     }
 
     // ── Client-side password length check (Supabase minimum is 6 chars) ───
     if (password.length < 6) {
+      console.warn('[ZILLA] Blocked by password-length check (length=' + password.length + ')');
       setPasswordTooShort(true);
       return;
     }
@@ -41,13 +51,45 @@ export default function AuthPage() {
 
     try {
       // ── 1. Create the user in Supabase Auth ──────────────────────────────
+      // Pass full_name in user_metadata so DB triggers and getUser()
+      // calls downstream can read it without a separate profiles fetch.
       const signUpEmail = email.trim();
-      console.log("[ZILLA] signUp payload →", { email: signUpEmail });
+      const signUpName  = fullName.trim();
+      // ── DEBUG: verify what the browser actually sees for env vars ──────────
+      console.log('[ZILLA] process.env.NEXT_PUBLIC_SUPABASE_URL (browser) =',
+        process.env.NEXT_PUBLIC_SUPABASE_URL ?? '⚠️  undefined');
+      console.log('[ZILLA] supabase client instance =', supabase);
+      console.log("[ZILLA] signUp payload →", { email: signUpEmail, full_name: signUpName });
 
       const { data, error } = await supabase.auth.signUp({
         email: signUpEmail,
         password,
+        options: {
+          data: {
+            // Stored as user_metadata.full_name on the Supabase auth.users row.
+            full_name: signUpName,
+          },
+        },
       });
+
+      // ── DEBUG: log the full Supabase response ────────────────────────────
+      console.log('[ZILLA] supabase.auth.signUp() raw response →', { data, error });
+
+      // ── Network / Supabase error ─────────────────────────────────────────
+      // A `TypeError: Failed to fetch` (ERR_CONNECTION_CLOSED, offline, CORS
+      // block, etc.) is caught by the outer `catch` block below and shown
+      // as a user-friendly banner.  Supabase-level errors surface here.
+      // ── Supabase email-confirmation flow: user is returned but session is null ─
+      // When "Confirm email" is enabled in Supabase, signUp() returns a user
+      // object but session === null. This is NOT an error — the user must click
+      // the confirmation link before they can log in. Show a friendly message.
+      if (!error && data.user && !data.session) {
+        console.log('[ZILLA] Email confirmation required — user created but no session yet.');
+        setAuthError(
+          'Account created! Please check your email and click the confirmation link to continue.'
+        );
+        return;
+      }
 
       if (error || !data.user) {
         console.error("[ZILLA] Signup failed:", error);
@@ -56,7 +98,7 @@ export default function AuthPage() {
             ? "An account with this email already exists. Try logging in instead."
             : error?.message ?? "Signup failed. Please try again."
         );
-        setIsLoading(false);
+        // Do NOT call setIsLoading(false) here — `finally` handles it.
         return;
       }
 
@@ -64,20 +106,39 @@ export default function AuthPage() {
       const userId = data.user.id;
       localStorage.setItem("zilla_session_id", userId);
       localStorage.setItem("zilla_user_role", "seeker");
-      localStorage.setItem("zillaUser", JSON.stringify({ fullName: fullName.trim(), email: signUpEmail }));
+      localStorage.setItem("zillaUser", JSON.stringify({ fullName: signUpName, email: signUpEmail }));
 
       // ── 3. Guarantee a minimal seeker_profiles row for FK safety ─────────
-      await ensureSeekerProfile({ fullName: fullName.trim() });
+      // Wrapped in its own try/catch so a lock error or DB hiccup here
+      // cannot prevent `finally` from clearing the loading spinner.
+      try {
+        await ensureSeekerProfile({ fullName: signUpName });
+      } catch (profileErr) {
+        // Non-fatal: the profile can be created later during onboarding.
+        console.warn("[ZILLA] ensureSeekerProfile failed (non-fatal):", profileErr);
+      }
 
       // ── 4. Always send brand-new users through the onboarding flow ────────
-      // After sign-up the profile exists but has empty preference fields, so
-      // we always route to /role → /onboarding rather than straight to the
-      // dashboard.  Only returning users who have already onboarded skip this.
       router.push("/role");
     } catch (err) {
+      // This catch handles:
+      //   • TypeError: Failed to fetch  (network offline / ERR_CONNECTION_CLOSED)
+      //   • AbortError from a Supabase storage-lock race
+      //   • Any other unexpected runtime exception
+      const isNetworkError =
+        err instanceof TypeError && err.message.toLowerCase().includes("fetch");
+
       console.error("[ZILLA] Unexpected signup error:", err);
-      setAuthError("An unexpected error occurred. Please try again.");
+
+      setAuthError(
+        isNetworkError
+          ? "Could not reach the server. Please check your internet connection and try again."
+          : "An unexpected error occurred. Please try again."
+      );
     } finally {
+      // `finally` is the SINGLE place that clears the loading state.
+      // It runs on every code path: success, Supabase error, network
+      // failure, or any thrown exception — so the spinner always stops.
       setIsLoading(false);
     }
   };

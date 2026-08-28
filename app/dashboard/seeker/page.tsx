@@ -502,14 +502,61 @@ export default function SeekerDashboard() {
   // ── Saved rooms ─────────────────────────────────────────────────────────────
   const [savedRoomIds, setSavedRoomIds] = useState<Set<string>>(new Set());
   const [authUserId, setAuthUserId] = useState<string | null>(null);
+  /**
+   * Tracks whether the saved-rooms fetch is in progress.
+   * Starts as `true` so the UI never flashes the empty-state before the
+   * first fetch completes. Flipped to `false` in the `finally` block.
+   */
+  const [loadingSavedRooms, setLoadingSavedRooms] = useState(true);
 
   const fetchSavedRooms = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    setAuthUserId(user.id);
-    const { data: saved, error } = await supabase.from("saved_rooms").select("room_id").eq("seeker_id", user.id);
-    if (error) { console.error("[fetchSavedRooms]", error); return; }
-    if (saved) setSavedRoomIds(new Set(saved.map((r) => r.room_id as string)));
+    // ── FIX: use getSession() instead of getUser() ─────────────────────────
+    // `getUser()` makes a network request to re-validate the token, which
+    // acquires a storage lock. When Next.js mounts the component multiple
+    // times (StrictMode double-invoke, concurrent renders, etc.) two calls
+    // race for the same lock and one throws:
+    //   "Lock 'lock:sb-...-auth-token' was released because another request stole it"
+    //
+    // `getSession()` reads the cached session from localStorage — no network
+    // round-trip, no lock acquisition — so concurrent calls are safe.
+    setLoadingSavedRooms(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      // No active session → user is not logged in; bail out cleanly.
+      if (!session?.user) {
+        console.warn("[fetchSavedRooms] No active session — skipping fetch.");
+        return;
+      }
+
+      const userId = session.user.id;
+      setAuthUserId(userId);
+
+      // Fetch this seeker's saved room IDs from the database.
+      const { data: saved, error } = await supabase
+        .from("saved_rooms")
+        .select("room_id")
+        .eq("seeker_id", userId);
+
+      if (error) {
+        // Log the error but do NOT re-throw — we still want `finally` to
+        // clear the loading state so the UI renders correctly.
+        console.error("[fetchSavedRooms] DB error:", error);
+        return;
+      }
+
+      // Populate the saved-room ID set (empty array → empty Set is correct).
+      setSavedRoomIds(new Set((saved ?? []).map((r) => r.room_id as string)));
+    } catch (err) {
+      // Unexpected errors (network outage, etc.) should not leave the UI
+      // stuck in a loading state.
+      console.error("[fetchSavedRooms] Unexpected error:", err);
+    } finally {
+      // Always clear the loading flag — whether we succeeded, errored, or
+      // bailed out early. This ensures the UI exits the loading state and
+      // correctly shows either the fetched rooms or the empty state.
+      setLoadingSavedRooms(false);
+    }
   }, []);
 
   /**
@@ -521,7 +568,9 @@ export default function SeekerDashboard() {
    */
   const fetchProfileCoord = useCallback(async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      // Same fix as fetchSavedRooms — use getSession() to avoid the lock.
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user) return;
 
       const { data: profile, error } = await supabase
@@ -552,7 +601,9 @@ export default function SeekerDashboard() {
 
   const toggleSave = async (e: React.MouseEvent, roomId: string) => {
     e.stopPropagation();
-    const { data: { user } } = await supabase.auth.getUser();
+    // Use getSession() for the same lock-avoidance reason as fetchSavedRooms.
+    const { data: { session } } = await supabase.auth.getSession();
+    const user = session?.user;
     if (!user) { console.warn("[toggleSave] No authenticated user — aborting."); return; }
     if (!authUserId) setAuthUserId(user.id);
     const uid = user.id;
