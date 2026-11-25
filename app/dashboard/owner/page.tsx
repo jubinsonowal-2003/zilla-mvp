@@ -150,7 +150,7 @@ export interface TenantRecord {
   lease_start: string;
   lease_end: string;
   lease_duration_months: number;
-  kyc_status: "Verified" | "Pending Review";
+  kyc_status: "Verified" | "Pending" | "Pending Review";
   kyc_id_type: string;
   kyc_id_number: string;
   emergency_contact: {
@@ -655,9 +655,14 @@ export default function OwnerDashboard() {
           lease_end: "TBD",
           lease_duration_months: 11,
           kyc_status: b.status === "locked_awaiting_docs" ? "Pending" : "Verified",
-          kyc_details: {
-            document_type: "Aadhaar / PAN (Required)",
+          kyc_id_type: "Aadhaar / PAN (Required)",
+          kyc_id_number: "Pending Verification",
+          emergency_contact: {
+            name: "Pending Onboarding",
+            relationship: "N/A",
+            phone: b.tenant_phone || seeker?.phone || "N/A",
           },
+          agreement_id: `ZILLA-AGR-${String(b.id).slice(0, 6).toUpperCase()}`,
         };
       });
 
