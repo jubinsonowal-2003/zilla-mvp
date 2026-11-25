@@ -5,6 +5,8 @@ export const metadata: Metadata = {
   description: "Your active booking ticket and secure visit code.",
 };
 
+import { getBookingDetails } from "@/app/actions/booking";
+import WhatsAppButton from "./WhatsAppButton";
 export default async function BookingTicketPage({
   params,
   searchParams,
@@ -15,8 +17,19 @@ export default async function BookingTicketPage({
   const { id } = await params;
   const { code } = await searchParams;
 
-  const secureCode = typeof code === "string" ? code : "----";
+  const { data: bookingData } = await getBookingDetails(id);
+  
+  // Use DB secure_code if available, otherwise fallback to searchParams or "----"
+  const rawCode = bookingData?.secure_code || (typeof code === "string" ? code : "----");
+  const secureCode = String(rawCode);
   const codeDigits = secureCode.padStart(4, "-").slice(0, 4).split("");
+
+  // Dynamically get owner's phone number
+  const rawOwnerPhone = (bookingData?.rooms as any)?.owner_phone || (bookingData?.rooms as any)?.phone || "9365497834";
+  const cleanedPhone = String(rawOwnerPhone).replace(/\D/g, "");
+  const whatsappNumber = cleanedPhone.startsWith("91") ? cleanedPhone : `91${cleanedPhone}`;
+  const whatsappText = "Hi, I have a confirmed visit scheduled for your property through ZILLA. Can you share the exact location map?";
+  const whatsappLink = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappText)}`;
 
   return (
     <div
@@ -109,16 +122,20 @@ export default async function BookingTicketPage({
               display: "inline-flex",
               alignItems: "center",
               gap: 8,
-              background: "rgba(255,190,60,0.12)",
-              border: "1px solid rgba(255,190,60,0.3)",
+              background: bookingData?.status === "locked_awaiting_docs" ? "rgba(79,70,229,0.12)" : bookingData?.status === "visit_scheduled" ? "rgba(34,197,94,0.12)" : "rgba(255,190,60,0.12)",
+              border: `1px solid ${bookingData?.status === "locked_awaiting_docs" ? "rgba(79,70,229,0.3)" : bookingData?.status === "visit_scheduled" ? "rgba(34,197,94,0.3)" : "rgba(255,190,60,0.3)"}`,
               borderRadius: 100,
               padding: "6px 14px",
               marginBottom: 16,
             }}
           >
-            <span style={{ fontSize: 14 }}>⏳</span>
-            <span style={{ fontSize: 12, fontWeight: 700, color: "#fbbf24", letterSpacing: "0.03em" }}>
-              Matching Schedules · ETA: 1 Hour
+            <span style={{ fontSize: 14 }}>{bookingData?.status === "locked_awaiting_docs" ? "🔒" : bookingData?.status === "visit_scheduled" ? "📅" : "⏳"}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: bookingData?.status === "locked_awaiting_docs" ? "#818cf8" : bookingData?.status === "visit_scheduled" ? "#4ade80" : "#fbbf24", letterSpacing: "0.03em" }}>
+              {bookingData?.status === "locked_awaiting_docs" 
+                ? "Room Locked & Secured"
+                : bookingData?.status === "visit_scheduled" && bookingData?.visit_time
+                ? `Visit Confirmed: ${new Date(bookingData.visit_time).toLocaleString("en-IN", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" })}`
+                : "Matching Schedules · ETA: 1 Hour"}
             </span>
           </div>
           <h1
@@ -131,10 +148,14 @@ export default async function BookingTicketPage({
               color: "#f0f0ff",
             }}
           >
-            Awesome! We&apos;ve got your request 🎉
+            {bookingData?.status === "locked_awaiting_docs" ? "Welcome to your new home! 🎉" : bookingData?.status === "visit_scheduled" ? "Visit Scheduled! 🎉" : "Awesome! We've got your request 🎉"}
           </h1>
           <p style={{ fontSize: 14, color: "rgba(200,200,230,0.75)", lineHeight: 1.6, maxWidth: 360, margin: "0 auto" }}>
-            Hold tight while we sync with the owner and lock in your visit slot. You&apos;ll hear from us very soon.
+            {bookingData?.status === "locked_awaiting_docs" 
+              ? "Your room is officially locked! Please go to your dashboard to complete KYC verification and deposit."
+              : bookingData?.status === "visit_scheduled" 
+              ? "Your visit is locked in. Be sure to arrive on time and have your Golden Key ready to share if you like the room!"
+              : "Hold tight while we sync with the owner and lock in your visit slot. You'll hear from us very soon."}
           </p>
         </div>
 
@@ -233,52 +254,34 @@ export default async function BookingTicketPage({
             textAlign: "center",
             position: "relative",
             overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
           }}
         >
-          <div style={{ filter: "blur(6px)", opacity: 0.35, pointerEvents: "none", userSelect: "none" }}>
-            <div style={{ fontSize: 14, marginBottom: 6, fontWeight: 600 }}>
-              👤 Owner: Raj Mehta &nbsp;·&nbsp; 📞 +91 98765 XXXXX
-            </div>
-            <div style={{ fontSize: 13, color: "rgba(200,200,220,0.7)" }}>
-              📍 3rd Floor, Sunrise Apartment, Link Road, Bandra West
-            </div>
-          </div>
           <div
             style={{
-              position: "absolute",
-              inset: 0,
+              width: 52,
+              height: 52,
+              borderRadius: 16,
+              background: "rgba(34,197,94,0.15)",
+              border: "1.5px solid rgba(34,197,94,0.3)",
               display: "flex",
-              flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              gap: 10,
-              background: "rgba(15,15,26,0.55)",
+              fontSize: 24,
+              marginBottom: 12,
             }}
           >
-            <div
-              style={{
-                width: 52,
-                height: 52,
-                borderRadius: 16,
-                background: "rgba(108,99,255,0.18)",
-                border: "1.5px solid rgba(108,99,255,0.35)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 24,
-              }}
-            >
-              🔒
-            </div>
-            <p style={{ fontWeight: 700, fontSize: 14, color: "#c4b8ff", textAlign: "center", marginBottom: 4 }}>
-              The Magic Window
-            </p>
-            <p style={{ fontSize: 12, color: "rgba(180,170,220,0.65)", textAlign: "center", maxWidth: 260, lineHeight: 1.5 }}>
-              Owner details and exact location will unlock{" "}
-              <strong style={{ color: "#a78bfa" }}>2 hours</strong> before your confirmed visit.
-            </p>
+            💬
           </div>
-          <div style={{ height: 60 }} />
+          <p style={{ fontWeight: 700, fontSize: 16, color: "#c4b8ff", textAlign: "center", marginBottom: 8 }}>
+            The Magic Window
+          </p>
+          <p className="text-sm text-gray-400 mb-4 text-center" style={{ maxWidth: 320 }}>
+            Your visit is secured. Feel free to chat or WhatsApp call the owner to coordinate your arrival and confirm exact landmarks.
+          </p>
+          <WhatsAppButton bookingId={id} whatsappLink={whatsappLink} />
         </div>
 
         {/* TIMELINE */}
@@ -305,11 +308,26 @@ export default async function BookingTicketPage({
           </p>
           {(
             [
-              { icon: "✅", label: "Booking received", done: true },
-              { icon: "🔄", label: "Owner confirming schedule", done: false },
-              { icon: "🔓", label: "Owner details unlocked (−2 hrs)", done: false },
-              { icon: "🏠", label: "Visit & decide", done: false },
-            ] as const
+              { 
+                icon: <span className="material-symbols-outlined text-[20px] text-green-400">check_circle</span>, 
+                label: "Booking Requested", 
+                done: true 
+              },
+              { 
+                icon: bookingData?.status === "confirmed" || bookingData?.status === "completed"
+                  ? <span className="material-symbols-outlined text-[20px] text-green-400">check_circle</span>
+                  : <span className="material-symbols-outlined text-[20px] text-gray-400">schedule</span>, 
+                label: "Owner Confirmation", 
+                done: bookingData?.status === "confirmed" || bookingData?.status === "completed"
+              },
+              { 
+                icon: bookingData?.status === "completed" 
+                  ? <span className="material-symbols-outlined text-[20px] text-green-400">check_circle</span>
+                  : <span className="material-symbols-outlined text-[20px] text-gray-400">key</span>, 
+                label: "Handover Golden Key", 
+                done: bookingData?.status === "completed" 
+              },
+            ]
           ).map((step, i, arr) => (
             <div
               key={i}
@@ -318,7 +336,7 @@ export default async function BookingTicketPage({
                 alignItems: "center",
                 gap: 14,
                 marginBottom: i < arr.length - 1 ? 16 : 0,
-                opacity: step.done ? 1 : 0.55,
+                opacity: step.done ? 1 : 0.65,
               }}
             >
               <div
@@ -326,12 +344,11 @@ export default async function BookingTicketPage({
                   width: 36,
                   height: 36,
                   borderRadius: 12,
-                  background: step.done ? "rgba(108,99,255,0.25)" : "rgba(255,255,255,0.05)",
-                  border: step.done ? "1.5px solid rgba(108,99,255,0.5)" : "1.5px solid rgba(255,255,255,0.08)",
+                  background: step.done ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.05)",
+                  border: step.done ? "1.5px solid rgba(34,197,94,0.3)" : "1.5px solid rgba(255,255,255,0.08)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontSize: 16,
                   flexShrink: 0,
                 }}
               >

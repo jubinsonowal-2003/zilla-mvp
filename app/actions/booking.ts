@@ -220,8 +220,8 @@ export async function getOwnerVisitRequests(ownerUserId?: string | null) {
 
     const filtered = (bookingsData || []).filter((b: any) => {
       if (!b.rooms) return false;
-      if (!ownerUserId) return true;
-      return b.rooms.user_id === ownerUserId || !b.rooms.user_id || true;
+      if (!ownerUserId) return false; // Strictly require an authenticated owner
+      return b.rooms.user_id === ownerUserId;
     });
 
     return { success: true, data: filtered };
@@ -236,21 +236,31 @@ export async function getOwnerVisitRequests(ownerUserId?: string | null) {
  */
 export async function updateBookingStatus(
   bookingId: string,
-  status: "pending" | "confirmed" | "declined" | "completed"
+  status: "pending" | "confirmed" | "declined" | "completed" | "visit_scheduled",
+  visitDate?: string
 ) {
   try {
     const supabase = getServerClient();
-    // Map application status to database booking_status enum ('pending' | 'completed' | 'expired')
+    // Map application status to database booking_status enum ('pending' | 'completed' | 'expired' | 'visit_scheduled')
     const dbStatus =
       status === "confirmed" || status === "completed"
         ? "completed"
         : status === "declined"
         ? "expired"
+        : status === "visit_scheduled"
+        ? "visit_scheduled"
         : "pending";
+
+    const payload: any = { status: dbStatus };
+    if (status === "visit_scheduled" && visitDate) {
+      payload.visit_date = visitDate;
+      payload.status = "visit_scheduled";
+      payload.visit_time = new Date(visitDate).toISOString();
+    }
 
     const { error } = await supabase
       .from("bookings")
-      .update({ status: dbStatus })
+      .update(payload)
       .eq("id", bookingId);
 
     if (error) {
@@ -263,3 +273,174 @@ export async function updateBookingStatus(
   }
 }
 
+/**
+ * getSeekerBookings — fetches visit requests for seeker dashboard bypassing RLS
+ */
+export async function getSeekerBookings(seekerProfileId: string) {
+  try {
+    const supabase = getServerClient();
+    const { data, error } = await supabase
+      .from("bookings")
+      .select(`
+        id,
+        status,
+        visit_time,
+        priority_date_1,
+        rooms (
+          title,
+          image_url,
+          image_urls,
+          location
+        )
+      `)
+      .eq("seeker_id", seekerProfileId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[getSeekerBookings] Error fetching bookings:", error);
+      return { success: false, error: error.message, data: [] };
+    }
+
+    return { success: true, data: data || [] };
+  } catch (err: any) {
+    console.error("[getSeekerBookings] Exception:", err);
+    return { success: false, error: err?.message || "Failed to fetch bookings", data: [] };
+  }
+}
+
+/**
+ * getBookingDetails — fetches a single booking by ID bypassing RLS
+ */
+export async function getBookingDetails(bookingId: string) {
+  try {
+    const supabase = getServerClient();
+    const { data, error } = await supabase
+      .from("bookings")
+      .select(`
+        id,
+        status,
+        secure_code,
+        visit_time,
+        priority_date_1,
+        priority_date_2,
+        rooms (
+          title,
+          location,
+          user_id
+        )
+      `)
+      .eq("id", bookingId)
+      .single();
+
+    if (error) {
+      console.error("[getBookingDetails] Error:", error);
+      return { success: false, error: error.message, data: null };
+    }
+
+    return { success: true, data };
+  } catch (err: any) {
+    console.error("[getBookingDetails] Exception:", err);
+    return { success: false, error: err?.message || "Failed to fetch booking", data: null };
+  }
+}
+
+/**
+ * trackWhatsAppClick — tracks that a user clicked the WhatsApp button
+ */
+export async function trackWhatsAppClick(bookingId: string) {
+  try {
+    const supabase = getServerClient();
+    const { error } = await supabase
+      .from("bookings")
+      .update({ whatsapp_contacted: true } as any)
+      .eq("id", bookingId);
+
+    if (error) {
+      console.error("[trackWhatsAppClick] Error:", error);
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (err: any) {
+    console.error("[trackWhatsAppClick] Exception:", err);
+    return { success: false, error: err?.message || "Failed to track WhatsApp click" };
+  }
+}
+
+
+export async function verifyGoldenKey(code: string, ownerId: string) {
+  try {
+    const supabase = getServerClient();
+    if (!ownerId) return { success: false, error: "Unauthorized" };
+
+    console.log(`[verifyGoldenKey] Attempting verification for code: ${code}, ownerId: ${ownerId}`);
+
+    // Try finding the booking matching the owner and code
+    // Removed status filter entirely to prevent enum mismatch crash before we can update it
+    const { data: bookings, error } = await supabase
+      .from("bookings")
+      .select("id, room_id, status, secure_code, rooms!inner(user_id)")
+      .eq("rooms.user_id", ownerId)
+      .eq("secure_code", parseInt(code, 10)) // Try as number first if it's an int column
+      .maybeSingle();
+
+    let finalBooking = bookings;
+
+    // Fallback if the column is actually a string type
+    if (!finalBooking) {
+      const { data: stringBookings, error: stringError } = await supabase
+        .from("bookings")
+        .select("id, room_id, status, secure_code, rooms!inner(user_id)")
+        .eq("rooms.user_id", ownerId)
+        .eq("secure_code", code) // Try as string
+        .maybeSingle();
+        
+      finalBooking = stringBookings;
+      if (stringError) console.error("[verifyGoldenKey] String query error:", stringError);
+    }
+
+    if (!finalBooking) {
+      console.log(`[verifyGoldenKey] No matching booking found. Checked int/string types for code ${code} and owner ${ownerId}`);
+      if (error) console.error("[verifyGoldenKey] Int query error:", error);
+      return { success: false, error: "Invalid code, please try again." };
+    }
+
+    // Update status to locked_awaiting_docs
+    const { error: updateError } = await supabase
+      .from("bookings")
+      .update({ status: "locked_awaiting_docs" } as any)
+      .eq("id", finalBooking.id);
+
+    if (updateError) {
+      console.error("[verifyGoldenKey] Update Error:", updateError);
+      
+      // Check for Postgres enum error (22P02: invalid input value for enum)
+      if (updateError.code === "22P02" || updateError.message.includes("enum")) {
+        return { 
+          success: false, 
+          error: "Database requires an update to support the new status. Please run the SQL migration provided."
+        };
+      }
+      return { success: false, error: "Failed to lock the room." };
+    }
+
+    // Perform the rest of the atomic transaction: Deactivate property & Cancel other requests
+    if (finalBooking.room_id) {
+      // Deactivate the room so it vanishes from the platform
+      await supabase.from("rooms").update({ status: "inactive" }).eq("id", finalBooking.room_id);
+      
+      // Cancel all other pending/scheduled requests for this room
+      await supabase
+        .from("bookings")
+        .update({ status: "expired" } as any)
+        .eq("room_id", finalBooking.room_id)
+        .neq("id", finalBooking.id)
+        .in("status", ["pending", "visit_scheduled"]);
+    }
+
+    console.log(`[verifyGoldenKey] Successfully verified and locked booking ${finalBooking.id}`);
+    return { success: true };
+  } catch (err: any) {
+    console.error("[verifyGoldenKey] Exception:", err);
+    return { success: false, error: "Invalid code, please try again." };
+  }
+}

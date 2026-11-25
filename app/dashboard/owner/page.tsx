@@ -66,11 +66,12 @@ import {
   DollarSign,
   AlertTriangle,
   FileSpreadsheet,
+  Upload,
 } from "lucide-react";
 import TopAppBar from "../../components/TopAppBar";
 import BottomNav from "../../components/BottomNav";
 import { supabase } from "@/lib/supabase";
-import { getOwnerVisitRequests, updateBookingStatus } from "@/app/actions/booking";
+import { getOwnerVisitRequests, updateBookingStatus, verifyGoldenKey } from "@/app/actions/booking";
 
 const AVATAR_URL =
   "https://lh3.googleusercontent.com/aida-public/AB6AXuBgyJm2UjeOTYSloBNtAfGng2YGbcAezqi7U0vV4CEIRGhpFw59XVGUS2guACo-zTOCMoMk1XVw0xDd6YTdlyXEB3wEmGF8SiI8Bu_Sk1OoUQtYHjh6hOMPh2gqu_InBJztB996SSz4kenNaNtP1fdF7EQlNdTceOkZtr6f5oYoxkQi84paDTq_kYSyKtBLNhXlHeWk2AbbNsT3O7LiMsBL7Dq02AMp0j1gPGDs6vV5MA01on6GZHvE4iUyR007qJpJiXNcZCdOwig";
@@ -126,6 +127,7 @@ export interface VisitRequest {
   priority_date_2: { date: string; timeSlot: string };
   selected_date_idx: 1 | 2;
   status: "Pending" | "Confirmed" | "Declined";
+  visit_time?: string;
   seeker_message?: string;
   created_at: string;
 }
@@ -421,10 +423,10 @@ const FURNISHING_OPTIONS = [
 
 export default function OwnerDashboard() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<TabType>("Rented & Tenants");
-  const [listings, setListings] = useState<OwnerListing[]>(INITIAL_OWNER_LISTINGS);
+  const [activeTab, setActiveTab] = useState<TabType>("Active Listings");
+  const [listings, setListings] = useState<OwnerListing[]>([]);
   const [visitRequests, setVisitRequests] = useState<VisitRequest[]>([]);
-  const [tenants, setTenants] = useState<TenantRecord[]>(INITIAL_TENANTS);
+  const [tenants, setTenants] = useState<TenantRecord[]>([]);
   const [isLoadingListings, setIsLoadingListings] = useState(false);
   const [isLoadingVisits, setIsLoadingVisits] = useState(true);
   const [goldenKeyModalOpen, setGoldenKeyModalOpen] = useState(false);
@@ -460,8 +462,8 @@ export default function OwnerDashboard() {
       id: "Visit Requests",
       label: "Visit Requests",
       icon: Bell,
-      count: pendingVisitCount,
-      badge: pendingVisitCount > 0 ? "New" : undefined,
+      count: visitRequests.length,
+      badge: pendingVisitCount > 0 ? `${pendingVisitCount} New` : undefined,
     },
     {
       id: "Rented & Tenants",
@@ -475,13 +477,17 @@ export default function OwnerDashboard() {
   const loadDbListings = useCallback(async () => {
     try {
       setIsLoadingListings(true);
-      const sessionId =
-        typeof window !== "undefined" ? localStorage.getItem("zilla_session_id") : null;
-      let query = supabase.from("rooms").select("*").order("created_at", { ascending: false });
-      if (sessionId) {
-        query = query.eq("user_id", sessionId);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setListings([]);
+        return;
       }
-      const { data, error } = await query;
+      const { data, error } = await supabase
+        .from("rooms")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+
       if (!error && data && data.length > 0) {
         const dbListings: OwnerListing[] = data.map((item) => ({
           id: item.id,
@@ -500,14 +506,17 @@ export default function OwnerDashboard() {
           room_type: item.room_type || "Single Room",
           furnishing: item.furnishing || "Furnished",
           amenities: item.amenities || ["WiFi", "Power Backup", "Geyser"],
-          views: Math.floor(Math.random() * 90 + 35),
-          inquiries: Math.floor(Math.random() * 8 + 2),
+          views: 0,
+          inquiries: 0,
           created_at: "Recently",
         }));
         setListings(dbListings);
+      } else {
+        setListings([]);
       }
     } catch (err) {
-      console.warn("Using default active listings:", err);
+      console.warn("Failed to fetch listings:", err);
+      setListings([]);
     } finally {
       setIsLoadingListings(false);
     }
@@ -518,12 +527,13 @@ export default function OwnerDashboard() {
     setIsLoadingVisits(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const sessionId =
-        user?.id ||
-        (typeof window !== "undefined" ? localStorage.getItem("zilla_session_id") : null);
+      if (!user) {
+        setVisitRequests([]);
+        return;
+      }
 
       // Fetch live visit requests via server action (joins bookings, rooms, seeker_profiles)
-      const res = await getOwnerVisitRequests(sessionId);
+      const res = await getOwnerVisitRequests(user.id);
 
       if (!res.success) {
         console.error("[OwnerDashboard] Error fetching visit requests from Supabase:", res.error);
@@ -538,7 +548,14 @@ export default function OwnerDashboard() {
         return;
       }
 
-      const mappedRequests: VisitRequest[] = bookingsData.map((b: any) => {
+      // Ensure visit requests ONLY show pending or visit_scheduled/confirmed
+      const activeVisitBookings = bookingsData.filter((b: any) => 
+        b.status === "pending" || b.status === "visit_scheduled" || b.status === "confirmed" || b.status === "completed" || b.status === "cancelled" || b.status === "declined" || b.status === "expired"
+      ).filter((b: any) => 
+        b.status !== "locked_awaiting_docs" && b.status !== "active_tenant" && b.status !== "rented"
+      );
+
+      const mappedRequests: VisitRequest[] = activeVisitBookings.map((b: any) => {
         const room = Array.isArray(b.rooms) ? b.rooms[0] : b.rooms;
         const seeker = Array.isArray(b.seeker_profiles) ? b.seeker_profiles[0] : b.seeker_profiles;
 
@@ -571,7 +588,7 @@ export default function OwnerDashboard() {
         const slot2 = formatSlotDate(b.priority_date_2, "04:30 PM - 05:30 PM");
 
         const statusCapitalized =
-          b.status === "confirmed" || b.status === "completed"
+          b.status === "visit_scheduled" || b.status === "confirmed" || b.status === "completed"
             ? "Confirmed"
             : b.status === "cancelled" || b.status === "declined" || b.status === "expired"
             ? "Declined"
@@ -596,7 +613,8 @@ export default function OwnerDashboard() {
           priority_date_1: slot1,
           priority_date_2: slot2,
           selected_date_idx: 1,
-          status: statusCapitalized,
+          status: statusCapitalized as "Pending" | "Confirmed" | "Declined",
+          visit_time: b.visit_time,
           seeker_message: isLocked
             ? "10% Security Deposit pre-paid to lock the visit and prioritize walkthrough."
             : "Interested in scheduling an in-person tour of the room.",
@@ -605,6 +623,45 @@ export default function OwnerDashboard() {
       });
 
       setVisitRequests(mappedRequests);
+
+      // Extract tenants (bookings that are locked awaiting docs or active tenants)
+      const tenantBookings = bookingsData.filter((b: any) => 
+        b.status === "locked_awaiting_docs" || b.status === "active_tenant"
+      );
+
+      const mappedTenants: TenantRecord[] = tenantBookings.map((b: any) => {
+        const room = Array.isArray(b.rooms) ? b.rooms[0] : b.rooms;
+        const seeker = Array.isArray(b.seeker_profiles) ? b.seeker_profiles[0] : b.seeker_profiles;
+
+        const seekerName = b.tenant_name || seeker?.full_name || "Verified Seeker";
+        const seekerAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(seekerName)}`;
+
+        return {
+          id: b.id,
+          name: seekerName,
+          avatar: seekerAvatar,
+          profession: seeker?.work_style || "Verified Professional",
+          phone: b.tenant_phone || seeker?.phone || "Awaiting Contact Info",
+          email: seeker?.email || "N/A",
+          property_title: room?.title || "ZILLA Verified Property",
+          property_location: room?.location || "Bangalore, India",
+          property_image: room?.image_url || room?.image_urls?.[0] || "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=400&q=80",
+          room_type: room?.room_type || "Private Room",
+          monthly_rent: room?.price || 0,
+          rent_status: "Paid",
+          rent_status_detail: "Security Deposit Vaulted",
+          security_deposit: room?.deposit || (room?.price ? room.price * 2 : 0),
+          lease_start: new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }),
+          lease_end: "TBD",
+          lease_duration_months: 11,
+          kyc_status: b.status === "locked_awaiting_docs" ? "Pending" : "Verified",
+          kyc_details: {
+            document_type: "Aadhaar / PAN (Required)",
+          },
+        };
+      });
+
+      setTenants(mappedTenants);
     } catch (err) {
       console.error("[OwnerDashboard] Unexpected error fetching visit requests:", err);
       showToast("Network error loading visit requests.", "error");
@@ -615,8 +672,53 @@ export default function OwnerDashboard() {
   }, [showToast]);
 
   useEffect(() => {
-    loadDbListings();
-    fetchLiveVisitRequests();
+    let isMounted = true;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    const init = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || !isMounted) return;
+
+      await Promise.all([loadDbListings(), fetchLiveVisitRequests()]);
+
+      // Supabase Realtime Data Sync Setup
+      channel = supabase.channel('owner_dashboard_sync');
+
+      channel
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'rooms' },
+          (payload) => {
+            // Strict client-side isolation check
+            const payloadUserId = (payload.new as any)?.user_id || (payload.old as any)?.user_id;
+            if (payloadUserId && payloadUserId !== user.id) return;
+            
+            // Re-fetch to apply changes mapping to local state smoothly
+            loadDbListings();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'bookings' },
+          (payload) => {
+            // Refetch bookings to ensure we get joined relations (seeker_profiles, rooms). 
+            // The server action getOwnerVisitRequests strictly filters by user.id.
+            fetchLiveVisitRequests();
+          }
+        )
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            console.log('Realtime sync established for owner dashboard.');
+          }
+        });
+    };
+
+    init();
+
+    return () => {
+      isMounted = false;
+      if (channel) supabase.removeChannel(channel);
+    };
   }, [loadDbListings, fetchLiveVisitRequests]);
 
   const handleAddNewListing = (newListing: OwnerListing) => {
@@ -663,7 +765,8 @@ export default function OwnerDashboard() {
     );
 
     try {
-      await updateBookingStatus(requestId, "confirmed");
+      const visitDateStr = `${selectedDate.date} ${selectedDate.timeSlot}`;
+      await updateBookingStatus(requestId, "visit_scheduled", visitDateStr);
     } catch (err) {
       console.warn("Could not sync confirmation to Supabase:", err);
     }
@@ -704,21 +807,27 @@ export default function OwnerDashboard() {
     );
   };
 
-  const handleSyncGoldenKey = (e: React.FormEvent) => {
+  const handleSyncGoldenKey = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!goldenKeyCode.trim()) return;
     setKeySubmitting(true);
-    setTimeout(() => {
+    
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
       setKeySubmitting(false);
+      showToast("Unauthorized. Please log in.", "error");
+      return;
+    }
+
+    const res = await verifyGoldenKey(goldenKeyCode, user.id);
+    setKeySubmitting(false);
+
+    if (res.success) {
       setKeySuccess(true);
-      setTimeout(() => {
-        setKeySuccess(false);
-        setGoldenKeyModalOpen(false);
-        setGoldenKeyCode("");
-        setActiveTab("Rented & Tenants");
-        showToast("Tenant & Lease Synced via Golden Key!");
-      }, 1200);
-    }, 900);
+      showToast("Room Locked! Awaiting tenant documents.", "success");
+    } else {
+      showToast(res.error || "Invalid code, please try again.", "error");
+    }
   };
 
   return (
@@ -728,7 +837,7 @@ export default function OwnerDashboard() {
 
       {/* ── Toast Notification Banner ── */}
       {toast && (
-        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-2xl bg-slate-900 dark:bg-slate-800 text-white font-headline text-xs font-semibold shadow-2xl flex items-center gap-2.5 animate-[fadeIn_0.15s_ease-out] border border-slate-800 dark:border-slate-700">
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[60] px-5 py-2.5 rounded-2xl bg-slate-900 dark:bg-slate-800 text-white font-headline text-xs font-semibold shadow-2xl flex items-center gap-2.5 animate-[fadeIn_0.15s_ease-out] border border-slate-800 dark:border-slate-700">
           {toast.type === "error" ? (
             <AlertCircle className="w-4 h-4 text-rose-400" />
           ) : toast.type === "info" ? (
@@ -843,6 +952,7 @@ export default function OwnerDashboard() {
           {activeTab === "Active Listings" && (
             <ActiveListingsView
               listings={listings}
+              visitRequests={visitRequests}
               isLoading={isLoadingListings}
               onSwitchTab={setActiveTab}
               onDelete={handleDeleteListing}
@@ -929,37 +1039,43 @@ export default function OwnerDashboard() {
             </p>
 
             {keySuccess ? (
-              <div className="p-6 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 flex flex-col items-center justify-center text-center gap-2 animate-[fadeIn_0.2s_ease-out]">
-                <div className="w-12 h-12 rounded-full bg-emerald-500 text-white flex items-center justify-center">
+              <div className="p-6 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 flex flex-col items-center justify-center text-center gap-4 animate-[fadeIn_0.2s_ease-out]">
+                <div className="w-12 h-12 rounded-full bg-emerald-500 text-white flex items-center justify-center mt-2">
                   <Check className="w-6 h-6 stroke-[3]" />
                 </div>
-                <h4 className="font-bold font-headline text-emerald-900 dark:text-emerald-200 text-base">Golden Key Verified!</h4>
-                <p className="text-xs text-emerald-700 dark:text-emerald-300">Syncing tenant vault and lease agreement records…</p>
+                <div>
+                  <h4 className="font-bold font-headline text-emerald-900 dark:text-emerald-200 text-base">Golden Key Verified!</h4>
+                  <p className="text-xs text-emerald-700 dark:text-emerald-300 mt-1">Tenant verification and digital lease synced successfully.</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setKeySuccess(false);
+                    setGoldenKeyModalOpen(false);
+                    setGoldenKeyCode("");
+                    setActiveTab("Rented & Tenants");
+                  }}
+                  className="mt-2 w-full px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-headline text-sm font-semibold shadow-md shadow-emerald-500/20 transition-all cursor-pointer"
+                >
+                  Done
+                </button>
               </div>
             ) : (
               <form onSubmit={handleSyncGoldenKey} className="flex flex-col gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="goldenKeyInput" className="text-xs font-semibold font-headline text-slate-700 dark:text-slate-300 uppercase tracking-wider">
-                    Golden Key Voucher / Token
+                <div className="flex flex-col gap-1.5 items-center">
+                  <label htmlFor="goldenKeyInput" className="text-sm font-semibold font-headline text-slate-700 dark:text-slate-300 text-center w-full mt-2">
+                    Enter the 4-digit Secure Code provided by the tenant
                   </label>
-                  <div className="relative">
+                  <div className="relative mt-4 mb-2">
                     <input
                       id="goldenKeyInput"
                       type="text"
-                      placeholder="e.g. ZILLA-KEY-8942-X7"
+                      maxLength={4}
+                      placeholder="----"
                       value={goldenKeyCode}
-                      onChange={(e) => setGoldenKeyCode(e.target.value.toUpperCase())}
-                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl px-4 py-3.5 text-sm font-mono font-semibold tracking-wider text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:bg-white dark:focus:bg-slate-800 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 focus:outline-none transition-all"
+                      onChange={(e) => setGoldenKeyCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                      className="w-48 text-center bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-2xl px-4 py-4 text-4xl font-mono font-bold tracking-[0.5em] indent-[0.25em] text-indigo-700 dark:text-indigo-400 placeholder:text-slate-300 focus:bg-white dark:focus:bg-slate-800 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 focus:outline-none transition-all"
                       autoFocus
                     />
-                    <button
-                      type="button"
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 text-xs font-medium flex items-center gap-1 transition-colors cursor-pointer"
-                      title="Scan QR Code"
-                    >
-                      <QrCode className="w-3.5 h-3.5" />
-                      <span>Scan</span>
-                    </button>
                   </div>
                 </div>
 
@@ -980,7 +1096,7 @@ export default function OwnerDashboard() {
                   </button>
                   <button
                     type="submit"
-                    disabled={!goldenKeyCode.trim() || keySubmitting}
+                    disabled={goldenKeyCode.length < 4 || keySubmitting}
                     className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-headline text-sm font-semibold shadow-md shadow-indigo-500/20 transition-all cursor-pointer flex items-center gap-2"
                   >
                     {keySubmitting ? (
@@ -990,7 +1106,7 @@ export default function OwnerDashboard() {
                       </>
                     ) : (
                       <>
-                        <span>Sync Tenant & Lease</span>
+                        <span>Verify & Lock Room</span>
                         <ArrowRight className="w-4 h-4" />
                       </>
                     )}
@@ -1146,7 +1262,7 @@ function AddPropertyView({
       const defaultCover =
         "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=1200&q=80";
       const finalCoverUrl =
-        previewUrls[0] || (uploadedImageUrls.length > 0 ? uploadedImageUrls[0] : defaultCover);
+        uploadedImageUrls.length > 0 ? uploadedImageUrls[0] : defaultCover;
 
       const rulesPayload: Record<string, string> = {
         food,
@@ -1157,6 +1273,31 @@ function AddPropertyView({
       };
       if ((propertyType === "pg" || propertyType === "hostel") && customDetails.trim()) {
         rulesPayload.custom_details = customDetails.trim();
+      }
+
+      // Auto-geocode location text if the owner didn't pin on the map or use GPS
+      let finalLat = latitude;
+      let finalLng = longitude;
+      if ((finalLat == null || finalLng == null) && location.trim()) {
+        try {
+          const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location.trim())}&limit=1`;
+          const geoRes = await fetch(geoUrl, {
+            headers: { "Accept-Language": "en", "User-Agent": "ZillaApp/1.0" },
+          });
+          if (geoRes.ok) {
+            const geoData = await geoRes.json();
+            if (geoData.length > 0) {
+              const parsedLat = parseFloat(geoData[0].lat);
+              const parsedLng = parseFloat(geoData[0].lon);
+              if (Number.isFinite(parsedLat) && Number.isFinite(parsedLng)) {
+                finalLat = parsedLat;
+                finalLng = parsedLng;
+              }
+            }
+          }
+        } catch {
+          // Graceful fallback: keep null if geocoding fails
+        }
       }
 
       const roomPayload = {
@@ -1175,8 +1316,8 @@ function AddPropertyView({
         furnishing: furnishing || "fully_furnished",
         amenities: amenities.length > 0 ? amenities : null,
         rules: rulesPayload,
-        latitude: latitude ?? null,
-        longitude: longitude ?? null,
+        latitude: finalLat ?? null,
+        longitude: finalLng ?? null,
       };
 
       try {
@@ -1788,6 +1929,7 @@ function SectionHeader({
 // ─────────────────────────────────────────────────────────────────────────────
 function ActiveListingsView({
   listings,
+  visitRequests,
   isLoading,
   onSwitchTab,
   onDelete,
@@ -1795,6 +1937,7 @@ function ActiveListingsView({
   onShowToast,
 }: {
   listings: OwnerListing[];
+  visitRequests: VisitRequest[];
   isLoading: boolean;
   onSwitchTab: (tab: TabType) => void;
   onDelete: (id: string) => void;
@@ -1810,8 +1953,7 @@ function ActiveListingsView({
   const totalMonthlyPotential = listings
     .filter((l) => l.status === "Active")
     .reduce((sum, l) => sum + (l.price || 0), 0);
-  const totalViews = listings.reduce((sum, l) => sum + (l.views || 0), 0);
-  const totalInquiries = listings.reduce((sum, l) => sum + (l.inquiries || 0), 0);
+  const totalInquiries = visitRequests.length;
 
   // Filter listings based on search & category
   const filteredListings = useMemo(() => {
@@ -1905,10 +2047,10 @@ function ActiveListingsView({
 
         <div className="p-5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-700/60 flex flex-col gap-1 shadow-2xs">
           <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-            Seeker Inquiries
+            Total Inquiries
           </span>
           <span className="text-2xl font-bold font-headline text-slate-900 dark:text-slate-100">
-            {totalViews} Views · {totalInquiries} Inquiries
+            {totalInquiries} Leads · {activeCount} Active Units
           </span>
           <span className="text-xs text-indigo-600 dark:text-indigo-400 font-medium mt-0.5">
             Real-time interest index
@@ -3032,9 +3174,15 @@ function TenantCard({
               <h3 className="text-base font-bold font-headline text-slate-900 dark:text-slate-100">
                 {tenant.name}
               </h3>
-              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
-                KYC Verified
-              </span>
+              {tenant.kyc_status === "Pending" ? (
+                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 border border-amber-200/60 dark:border-amber-800/60 animate-pulse">
+                  Awaiting Documents
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
+                  KYC Verified
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 font-body line-clamp-1">
               {tenant.profession}
@@ -3044,25 +3192,25 @@ function TenantCard({
 
         {/* ── Rent Status Tag Indicator ── */}
         <div className="flex flex-col items-end gap-1">
-          {isPaid ? (
+          {tenant.rent_status === "Paid" && tenant.kyc_status === "Pending" ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold font-headline bg-indigo-50 dark:bg-indigo-950/60 text-indigo-800 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 shadow-2xs">
+              <ShieldCheck className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+              <span>10% in ZILLA Vault</span>
+            </span>
+          ) : tenant.rent_status === "Paid" ? (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold font-headline bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 shadow-2xs">
               <CheckCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-              <span>Paid: ₹{tenant.monthly_rent.toLocaleString("en-IN")}</span>
-            </span>
-          ) : isOverdue ? (
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold font-headline bg-rose-50 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800 shadow-2xs animate-pulse">
-              <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
-              <span>Due: 4 Days Late (₹{tenant.monthly_rent.toLocaleString("en-IN")})</span>
+              <span>100% Secured</span>
             </span>
           ) : (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold font-headline bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shadow-2xs">
               <Clock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-              <span>Due Soon: ₹{tenant.monthly_rent.toLocaleString("en-IN")}</span>
+              <span>₹0 Paid (Pending)</span>
             </span>
           )}
 
           <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">
-            {tenant.rent_status_detail}
+            {tenant.rent_status === "Paid" && tenant.kyc_status === "Pending" ? "Security Deposit Vaulted" : tenant.rent_status_detail}
           </span>
         </div>
       </div>
@@ -3108,7 +3256,12 @@ function TenantCard({
           <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
           <span>Security Deposit:</span>
           <span className="text-indigo-700 dark:text-indigo-300 font-mono font-bold">
-            ₹{tenant.security_deposit.toLocaleString("en-IN")} Secured
+            {tenant.rent_status === "Paid" && tenant.kyc_status === "Verified" 
+              ? `₹${tenant.security_deposit.toLocaleString("en-IN")} Secured`
+              : tenant.rent_status === "Paid" && tenant.kyc_status === "Pending"
+                ? "10% Token Vaulted"
+                : "₹0 Secured"
+            }
           </span>
         </div>
         <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
@@ -3116,76 +3269,54 @@ function TenantCard({
         </span>
       </div>
 
-      {/* ── Contact Quick Actions & Document Vault Buttons ── */}
+      {/* ── Smart Action Bar & Fallback Menu ── */}
       <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
-        {/* Contact shortcuts */}
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => onShowToast(`Calling ${tenant.name} at ${tenant.phone}`, "info")}
-            className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center justify-center transition-colors cursor-pointer"
-            title="Call Tenant"
-          >
-            <Phone className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onShowToast(`Chat initiated with ${tenant.name}`, "info")}
-            className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center justify-center transition-colors cursor-pointer"
-            title="Message Tenant"
-          >
-            <MessageSquare className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onShowToast(`Email draft opened for ${tenant.email}`, "info")}
-            className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center justify-center transition-colors cursor-pointer"
-            title="Email Tenant"
-          >
-            <Mail className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* Document Vault Buttons */}
+        {/* Main Actions */}
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={onViewKyc}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400 text-xs font-semibold font-headline border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
+            onClick={onSendReminder}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold font-headline shadow-sm shadow-indigo-600/20 transition-all cursor-pointer"
           >
-            <FileText className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-            <span>📄 View KYC</span>
+            <Send className="w-3.5 h-3.5" />
+            <span>Remind</span>
           </button>
-
           <button
             type="button"
-            onClick={onViewLease}
+            onClick={tenant.kyc_status === "Pending" ? () => onShowToast("Tenant has not uploaded documents yet. Please click 'Remind' to notify them.", "info") : onViewKyc}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400 text-xs font-semibold font-headline border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
           >
-            <FileCheck className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-            <span>📜 Lease Agreement</span>
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Verification</span> Details
           </button>
+          <button
+            type="button"
+            onClick={tenant.kyc_status === "Pending" ? () => onShowToast("Tenant has not uploaded documents yet. Please click 'Remind' to notify them.", "info") : onViewLease}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400 text-xs font-semibold font-headline border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
+          >
+            <FileCheck className="w-3.5 h-3.5" />
+            Lease <span className="hidden sm:inline">Agreement</span>
+          </button>
+        </div>
 
-          {!isPaid && (
-            <button
-              type="button"
-              onClick={onSendReminder}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold font-headline shadow-sm shadow-indigo-600/20 transition-all cursor-pointer"
-            >
-              <Send className="w-3 h-3" />
-              <span>Remind</span>
-            </button>
-          )}
-
+        {/* Fallback Menu / Overrides */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onShowToast("Manual ID upload flow coming soon.", "info")}
+            className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 text-[10px] font-semibold uppercase tracking-wider border border-transparent transition-colors cursor-pointer"
+            title="Upload ID Manually"
+          >
+            <Upload className="w-3.5 h-3.5" />
+          </button>
           {!isPaid && (
             <button
               type="button"
               onClick={onRecordCash}
-              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/80 text-emerald-800 dark:text-emerald-300 text-xs font-semibold border border-emerald-200 dark:border-emerald-800 transition-colors cursor-pointer"
-              title="Record Cash Payment"
+              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/80 text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 text-[10px] font-semibold uppercase tracking-wider border border-transparent transition-colors cursor-pointer"
+              title="Mark Cash Received"
             >
-              <Receipt className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-              <span>Cash</span>
+              <Receipt className="w-3.5 h-3.5" />
             </button>
           )}
         </div>

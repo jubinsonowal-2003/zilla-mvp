@@ -35,6 +35,9 @@ interface Preferences {
   sleepSchedule: string;
   workStyle: string;
   smokingAllowed: boolean;
+  selectedCity?: string;
+  searchQuery?: string;
+  landmark?: string;
 }
 
 interface SeekerProfile {
@@ -475,6 +478,24 @@ function AmenitiesSection({ amenities }: { amenities: string[] }) {
   );
 }
 
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+const Spinner = () => (
+  <div className="flex items-center justify-center py-20">
+    <svg className="animate-spin h-8 w-8 text-primary" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+    </svg>
+  </div>
+);
+
+const EmptyState = ({ icon, title, desc }: { icon: string; title: string; desc: string }) => (
+  <div className="flex flex-col items-center justify-center py-20 text-center">
+    <span className="material-symbols-outlined text-6xl text-outline/40 mb-4">{icon}</span>
+    <h3 className="font-headline font-semibold text-lg text-on-surface mb-2">{title}</h3>
+    <p className="text-sm text-on-surface-variant max-w-xs">{desc}</p>
+  </div>
+);
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function SeekerDashboard() {
   const router = useRouter();
@@ -648,9 +669,18 @@ export default function SeekerDashboard() {
     } catch { /* ignore */ }
   }, []);
 
+  const [showWelcomeModal, setShowWelcomeModal] = useState(false);
+
   const fetchRooms = useCallback(async () => {
     setLoadingRooms(true);
-    const { data, error } = await supabase.from("rooms").select("*").eq("status", "active").order("created_at", { ascending: false });
+    // Fetch all active rooms (case-insensitive for "active" / "Active") without
+    // SQL location `.ilike` filtering, so client-side Haversine geo-search and
+    // tokenized text matching can evaluate all active listings accurately.
+    const { data, error } = await supabase
+      .from("rooms")
+      .select("*")
+      .in("status", ["active", "Active"])
+      .order("created_at", { ascending: false });
     if (!error && data) setRooms(data);
     setLoadingRooms(false);
   }, []);
@@ -665,9 +695,84 @@ export default function SeekerDashboard() {
     setLoadingSeekers(false);
   }, []);
 
+  const checkLockedBooking = useCallback(async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return null;
+      
+      console.log("[TenantWelcomeModal] Active User ID:", session.user.id);
+
+      const { data: profile } = await supabase
+        .from("seeker_profiles")
+        .select("id")
+        .eq("user_id", session.user.id)
+        .maybeSingle();
+
+      if (!profile) {
+        console.log("[TenantWelcomeModal] No seeker profile found for this user.");
+        return null;
+      }
+
+      console.log("[TenantWelcomeModal] Active Seeker Profile ID:", profile.id);
+
+      const { data, error } = await supabase
+        .from("bookings")
+        .select("id, status")
+        .eq("seeker_id", profile.id)
+        .eq("status", "locked_awaiting_docs")
+        .limit(1);
+        
+      console.log("[TenantWelcomeModal] Active Seeker Booking Status:", data?.[0]?.status, "Error:", error);
+
+      if (data && data.length > 0) {
+        setShowWelcomeModal(true);
+      }
+      return profile.id;
+    } catch (e) {
+      console.error("Failed to check locked bookings:", e);
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     if (authChecked) { fetchRooms(); fetchSeekers(); fetchSavedRooms(); fetchProfileCoord(); }
   }, [authChecked, fetchRooms, fetchSeekers, fetchSavedRooms, fetchProfileCoord]);
+
+  // Realtime subscription for Magic Welcome Modal
+  useEffect(() => {
+    if (!authChecked) return;
+    
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    const setup = async () => {
+      const profileId = await checkLockedBooking();
+      if (!profileId) return;
+
+      channel = supabase
+        .channel("tenant_booking_updates")
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "bookings", filter: `seeker_id=eq.${profileId}` },
+          (payload: any) => {
+            console.log("[Realtime TenantWelcomeModal] UPDATE received:", payload);
+            if (payload.new && payload.new.status === "locked_awaiting_docs") {
+              setShowWelcomeModal(true);
+            }
+          }
+        )
+        .subscribe((status) => {
+          console.log("[Realtime TenantWelcomeModal] Subscription status:", status);
+        });
+    };
+
+    setup();
+
+    return () => {
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+    };
+  }, [authChecked, checkLockedBooking]);
 
   // ── Debounced geocoding: fire 600 ms after the user stops typing ────────────
   const geocodeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -682,10 +787,14 @@ export default function SeekerDashboard() {
       setShowNearby(false);
     }
 
-    if (!searchQuery.trim()) return;
+    if (!searchQuery.trim()) {
+      fetchRooms();
+      return;
+    }
 
     if (geocodeTimerRef.current) clearTimeout(geocodeTimerRef.current);
     geocodeTimerRef.current = setTimeout(async () => {
+      fetchRooms();
       setIsGeocoding(true);
       const coord = await geocodeQuery(searchQuery.trim());
       setIsGeocoding(false);
@@ -705,12 +814,17 @@ export default function SeekerDashboard() {
 
   // ── Category + geo/text filter pipeline ────────────────────────────────────
   const searchTokens = tokenize(searchQuery);
+  const fallbackAreaText = searchQuery.trim()
+    ? searchQuery
+    : [prefs.preferredArea, prefs.landmark, prefs.searchQuery].filter(Boolean).join(" ");
+  const fallbackTokens = tokenize(fallbackAreaText);
 
   /**
    * Two-tier geo result.
    * primaryMatches  : ≤ GEO_PRIMARY_KM (5 km),  sorted closest-first.
    * secondaryMatches: (5, 25] km,               sorted closest-first.
-   * Rooms without coordinates are excluded from geo mode but included in text mode.
+   * Rooms without valid coordinates are NOT silently hidden if their text matches
+   * the seeker's area or search query (returned in textMatches).
    */
   const { primaryMatches, secondaryMatches, textMatches, isGeoActive } = (() => {
     // 1. Category filter (applied in both modes)
@@ -724,12 +838,28 @@ export default function SeekerDashboard() {
       type GeoRoom = { room: Room; distKm: number };
       const primary: GeoRoom[] = [];
       const secondary: GeoRoom[] = [];
+      const unpinned: { room: Room; score: number }[] = [];
 
       for (const room of byCategory) {
-        if (room.latitude == null || room.longitude == null) continue;
+        const hasValidCoords =
+          room.latitude != null &&
+          room.longitude != null &&
+          Number.isFinite(room.latitude) &&
+          Number.isFinite(room.longitude) &&
+          !(room.latitude === 0 && room.longitude === 0);
+
+        if (!hasValidCoords) {
+          // Keep rooms with missing/null coordinates if they match the seeker's
+          // area or search query so they aren't silently dropped.
+          const s = scoreRoom(room, fallbackTokens);
+          if (s > 0) {
+            unpinned.push({ room, score: s });
+          }
+          continue;
+        }
         const d = haversineKm(
           searchCoord.lat, searchCoord.lng,
-          room.latitude,   room.longitude
+          room.latitude!,  room.longitude!
         );
         if (d <= GEO_PRIMARY_KM)   primary.push({ room, distKm: d });
         else if (d <= GEO_SECONDARY_KM) secondary.push({ room, distKm: d });
@@ -738,8 +868,14 @@ export default function SeekerDashboard() {
 
       primary.sort((a, b) => a.distKm - b.distKm);
       secondary.sort((a, b) => a.distKm - b.distKm);
+      unpinned.sort((a, b) => b.score - a.score);
 
-      return { primaryMatches: primary, secondaryMatches: secondary, textMatches: [], isGeoActive: true };
+      return {
+        primaryMatches: primary,
+        secondaryMatches: secondary,
+        textMatches: unpinned.map((u) => u.room),
+        isGeoActive: true,
+      };
     }
 
     // ── TEXT / TOKEN MODE (fallback) ───────────────────────────────────────────
@@ -811,27 +947,46 @@ export default function SeekerDashboard() {
     router.push("/booking/" + result.bookingId + "?code=" + result.secureCode);
   };
 
-  // ── UI helpers ───────────────────────────────────────────────────────────────
-  const Spinner = () => (
-    <div className="flex items-center justify-center py-20">
-      <svg className="animate-spin h-8 w-8 text-primary" viewBox="0 0 24 24">
-        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-      </svg>
-    </div>
-  );
-
-  const EmptyState = ({ icon, title, desc }: { icon: string; title: string; desc: string }) => (
-    <div className="flex flex-col items-center justify-center py-20 text-center">
-      <span className="material-symbols-outlined text-6xl text-outline/40 mb-4">{icon}</span>
-      <h3 className="font-headline font-semibold text-lg text-on-surface mb-2">{title}</h3>
-      <p className="text-sm text-on-surface-variant max-w-xs">{desc}</p>
-    </div>
-  );
 
   // ─────────────────────────────────────────────────────────────────────────────
   return (
     <div className="bg-surface text-on-surface font-body min-h-dvh pb-32 md:pb-8">
+      {showWelcomeModal && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl p-6 sm:p-8 shadow-2xl border border-slate-100 dark:border-slate-800 text-center relative overflow-hidden">
+            {/* Top Header Placeholder */}
+            <div className="w-24 h-24 mx-auto mb-6 bg-indigo-50 dark:bg-indigo-900/40 rounded-full flex items-center justify-center text-5xl">
+              🦖🎉
+            </div>
+
+            <h2 className="text-2xl font-bold font-headline text-slate-900 dark:text-white mb-4">
+              Welcome to your new home! 🎉
+            </h2>
+            <p className="text-sm text-slate-600 dark:text-slate-300 font-body mb-8 px-2 leading-relaxed">
+              Your room is officially locked! To finalize your stay and generate your digital lease, please complete your KYC verification and clear your pending 10% ZILLA Escrow deposit.
+            </p>
+
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => {
+                  setShowWelcomeModal(false);
+                  router.push("/dashboard/seeker/profile");
+                }}
+                className="w-full py-3.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold font-headline transition-colors shadow-lg shadow-indigo-600/20"
+              >
+                Complete Verification & Pay
+              </button>
+              <button
+                onClick={() => setShowWelcomeModal(false)}
+                className="w-full py-3.5 px-4 rounded-xl bg-transparent hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 font-semibold font-body transition-colors"
+              >
+                I'll do it later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <TopAppBar avatarUrl={AVATAR_URL} showSearch showDesktopSearch showPreferences />
 
       <main className="pt-28 px-4 max-w-7xl mx-auto">
@@ -918,7 +1073,7 @@ export default function SeekerDashboard() {
                   Geo-search active · showing closest first
                 </span>
                 <span className="text-xs text-on-surface-variant font-body">
-                  {primaryMatches.length + (showNearby ? secondaryMatches.length : 0)} result{primaryMatches.length + (showNearby ? secondaryMatches.length : 0) !== 1 ? "s" : ""}
+                  {primaryMatches.length + (showNearby ? secondaryMatches.length : 0) + textMatches.length} result{primaryMatches.length + (showNearby ? secondaryMatches.length : 0) + textMatches.length !== 1 ? "s" : ""}
                 </span>
               </div>
             )}
@@ -938,12 +1093,26 @@ export default function SeekerDashboard() {
             ) : (
               /* ─────────── GEO mode ─────────── */
               isGeoActive ? (
-                primaryMatches.length === 0 && secondaryMatches.length === 0 ? (
-                  <EmptyState
-                    icon="location_off"
-                    title="No rooms found nearby"
-                    desc="No listed properties found within 25 km of that location. Try a different area."
-                  />
+                primaryMatches.length === 0 && secondaryMatches.length === 0 && textMatches.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-20 text-center">
+                    <span className="material-symbols-outlined text-6xl text-outline/40 mb-4">location_off</span>
+                    <h3 className="font-headline font-semibold text-lg text-on-surface mb-2">No rooms found nearby</h3>
+                    <p className="text-sm text-on-surface-variant max-w-xs mb-6">
+                      No listed properties found within 25 km of that location. Try a different area.
+                    </p>
+                    <button
+                      onClick={() => {
+                        setSearchCoord(null);
+                        setGeoMode("text");
+                        setSearchQuery("");
+                        setShowNearby(false);
+                      }}
+                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-primary text-on-primary font-headline font-semibold text-sm hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-md cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">explore</span>
+                      Show All Available Rooms
+                    </button>
+                  </div>
                 ) : (
                   <>
                     {/* Primary tier: ≤5 km */}
@@ -1021,6 +1190,34 @@ export default function SeekerDashboard() {
                           <span className="material-symbols-outlined text-[16px]">expand_less</span>
                           Collapse nearby results
                         </button>
+                      </>
+                    )}
+
+                    {/* Unpinned area/search fallback matches (rooms with missing coordinates) */}
+                    {textMatches.length > 0 && (
+                      <>
+                        {(primaryMatches.length > 0 || (secondaryMatches.length > 0 && showNearby)) && (
+                          <div className="flex items-center gap-3 my-6">
+                            <div className="flex-1 h-px bg-outline-variant/30" />
+                            <span className="text-xs text-on-surface-variant font-label font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                              <span className="material-symbols-outlined text-[14px]">location_searching</span>
+                              Area Matches
+                            </span>
+                            <div className="flex-1 h-px bg-outline-variant/30" />
+                          </div>
+                        )}
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+                          {textMatches.map((room, index) => (
+                            <RoomCard
+                              key={room.id}
+                              room={room}
+                              index={index}
+                              isSaved={savedRoomIds.has(room.id)}
+                              onToggleSave={toggleSave}
+                              onView={(r) => setSelectedRoom(r)}
+                            />
+                          ))}
+                        </div>
                       </>
                     )}
                   </>

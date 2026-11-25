@@ -194,6 +194,14 @@ export default function TopAppBar({
             </Link>
           )}
 
+          <Link
+            href="/booking"
+            className="flex items-center gap-1.5 text-xs font-semibold font-body text-primary dark:text-indigo-400 hover:text-primary-container dark:hover:text-indigo-300 border border-primary/30 dark:border-indigo-400/30 hover:border-primary/60 bg-primary/5 dark:bg-indigo-400/10 px-3 py-1.5 rounded-full transition-all duration-200 shadow-sm"
+          >
+            <span className="material-symbols-outlined text-[15px]">calendar_month</span>
+            My Bookings
+          </Link>
+
           {/* Theme Toggle Button */}
           <ThemeToggle />
 
@@ -235,6 +243,14 @@ export default function TopAppBar({
               <span className="material-symbols-outlined">search</span>
             </button>
           )}
+
+          <Link
+            href="/booking"
+            className="text-primary dark:text-indigo-400 hover:scale-105 transition-transform duration-200 p-1 flex items-center"
+            aria-label="My Bookings"
+          >
+            <span className="material-symbols-outlined text-[20px]">calendar_month</span>
+          </Link>
 
           {/* Mobile Theme Toggle */}
           <ThemeToggle />
